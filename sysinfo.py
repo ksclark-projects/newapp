@@ -231,17 +231,33 @@ def _memory_json_output() -> None:
     ))
 
 
+def _disk_plain_output(path: str = "/") -> None:
+    """Print disk-only information for *path* in human-readable form to stdout."""
+    usage = psutil.disk_usage(path)
+    _GiB = 1024 ** 3
+    used_gb = usage.used / _GiB
+    total_gb = usage.total / _GiB
+    free_gb = usage.free / _GiB
+    pct_str = colorize_pct(usage.percent, DISK_WARN, DISK_CRIT)
+    print(
+        f"{format_label(path + ':')} "
+        f"{pct_str} "
+        f"({used_gb:.1f} / {total_gb:.1f} GiB, {free_gb:.1f} GiB free)"
+    )
+
+
 def _disk_json_output(path: str = "/") -> None:
-    """Print disk info as a versioned JSON object to stdout (no ANSI codes)."""
+    """Print disk info for *path* as a versioned JSON object to stdout."""
     _GiB = 1024 ** 3
     usage = psutil.disk_usage(path)
     print(json.dumps(
         {
             "version": "1.0",
             "disk": {
-                "total_gb": round(usage.total / _GiB, 2),
-                "used_gb": round(usage.used / _GiB, 2),
-                "free_gb": round(usage.free / _GiB, 2),
+                # Rounded to 3 decimal places — consistent with memory sub-command
+                "total_gb": round(usage.total / _GiB, 3),
+                "used_gb": round(usage.used / _GiB, 3),
+                "free_gb": round(usage.free / _GiB, 3),
                 "percent": usage.percent,
             },
         },
@@ -318,6 +334,12 @@ def main() -> int:
             "({version, disk: {total_gb, used_gb, free_gb, percent}})."
         ),
     )
+    disk_parser.add_argument(
+        "--path",
+        default="/",
+        metavar="PATH",
+        help="Mount point or path to report disk usage for (default: /).",
+    )
 
     args = parser.parse_args()
 
@@ -339,8 +361,11 @@ def main() -> int:
     # --- disk sub-command ---
     if args.command == "disk":
         if args.disk_json:
-            _disk_json_output()
+            _disk_json_output(args.path)
             return 0
+        # No flags: show disk-only plain-text output.
+        _disk_plain_output(args.path)
+        return 0
 
     if args.command is None:
         # Only validate --top for the top-level (non-sub-command) path.
