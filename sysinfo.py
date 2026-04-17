@@ -205,7 +205,10 @@ def main() -> int:
     parser.add_argument(
         "--json",
         action="store_true",
-        help='Output disk metrics as JSON ({"disk": [...]}) and exit.',
+        help=(
+            "Output a full system snapshot as JSON "
+            "(python_version, cpu, memory, disk, top_processes) and exit."
+        ),
     )
     parser.add_argument(
         "--top",
