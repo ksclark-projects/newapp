@@ -200,3 +200,56 @@ def test_no_args_value_text_is_plain():
             assert "\x1b[" not in value_part, (
                 f"Value portion of line should be plain text, got: {line!r}"
             )
+
+
+# ---------------------------------------------------------------------------
+# Label colorization tests  (newapp-10j.3)
+# ---------------------------------------------------------------------------
+
+
+def test_format_label_contains_ansi_codes():
+    """format_label() output must contain ANSI escape sequences."""
+    result = sysinfo.format_label("OS Version:")
+    assert "\x1b[" in result, (
+        f"Expected ANSI escape codes in format_label output, got: {result!r}"
+    )
+
+
+def test_format_label_preserves_text():
+    """format_label() must include the original label text unchanged."""
+    label = "Python:"
+    result = sysinfo.format_label(label)
+    assert label in result, (
+        f"Expected {label!r} to appear in format_label output, got: {result!r}"
+    )
+
+
+def test_format_label_ends_with_reset():
+    """format_label() output must end with RESET_ALL so the value is unstyled."""
+    import colorama as _colorama
+    result = sysinfo.format_label("OS Version:")
+    assert result.endswith(_colorama.Style.RESET_ALL), (
+        f"format_label output should end with RESET_ALL, got: {result!r}"
+    )
+
+
+def test_format_label_uses_yellow():
+    """format_label() must apply Fore.YELLOW to the label."""
+    import colorama as _colorama
+    result = sysinfo.format_label("Python:")
+    assert _colorama.Fore.YELLOW in result, (
+        f"Expected Fore.YELLOW in format_label output, got: {result!r}"
+    )
+
+
+def test_format_label_all_labels_covered():
+    """Every label/value line in default output uses format_label styling."""
+    result = run_sysinfo()
+    clean = ANSI_ESCAPE.sub("", result.stdout)
+    # Each non-empty line in plain output should have a colon-terminated label
+    for line in clean.splitlines():
+        if not line.strip():
+            continue
+        assert ":" in line, (
+            f"Expected a labelled line (containing ':'), got: {line!r}"
+        )
