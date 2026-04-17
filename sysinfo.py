@@ -192,6 +192,23 @@ def get_python_version() -> str:
     return f"{v.major}.{v.minor}.{v.micro}"
 
 
+def _cpu_json_output() -> None:
+    """Print CPU info as a versioned JSON object to stdout (no ANSI codes)."""
+    # Single psutil call so overall and per-core figures are consistent.
+    cores = psutil.cpu_percent(interval=0.1, percpu=True)
+    overall = sum(cores) / len(cores) if cores else 0.0
+    print(json.dumps(
+        {
+            "version": "1.0",
+            "cpu": {
+                "overall": overall,
+                "cores": cores,
+            },
+        },
+        indent=2,
+    ))
+
+
 def main() -> int:
     """Entry point for sysinfo CLI."""
     parser = argparse.ArgumentParser(
@@ -217,10 +234,36 @@ def main() -> int:
         metavar="N",
         help="Show top N processes by CPU%% (default: 10; 0 to disable).",
     )
+
+    subparsers = parser.add_subparsers(dest="command")
+
+    # cpu sub-command
+    cpu_parser = subparsers.add_parser(
+        "cpu",
+        help="Show CPU information.",
+    )
+    cpu_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="cpu_json",
+        help="Output CPU info as JSON ({version, cpu: {overall, cores}}).",
+    )
+
     args = parser.parse_args()
 
-    if args.top < 0:
-        parser.error("--top must be >= 0")
+    # --- cpu sub-command ---
+    if args.command == "cpu":
+        if args.cpu_json:
+            _cpu_json_output()
+            return 0
+        # No flags: fall through to default human-readable display below,
+        # but first ensure --top is valid (default is 10, so normally fine).
+        # Reuse the same human-readable output for consistency.
+
+    if args.command is None:
+        # Only validate --top for the top-level (non-sub-command) path.
+        if args.top < 0:
+            parser.error("--top must be >= 0")
 
     if args.python_version:
         print(get_python_version())
