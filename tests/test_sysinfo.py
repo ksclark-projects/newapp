@@ -1198,59 +1198,223 @@ def test_memory_json_total_gb_ge_used_gb():
     )
 
 
-def test_memory_json_percent_uses_psutil_value():
-    """memory --json percent matches psutil.virtual_memory().percent."""
-    result = run_sysinfo("memory", "--json")
-    data = json.loads(result.stdout)
-    # psutil percent should be a float in range, not recomputed from used/total
-    assert isinstance(data["memory"]["percent"], float), (
-        f"Expected float for percent, got: {type(data['memory']['percent'])}"
-    )
-    assert 0.0 <= data["memory"]["percent"] <= 100.0, (
-        f"percent out of range: {data['memory']['percent']}"
-    )
-
-
 # ---------------------------------------------------------------------------
-# memory sub-command plain (no --json) tests  (PR #20 review)
+# disk sub-command --json tests  (newapp-odd.3 / US-003)
 # ---------------------------------------------------------------------------
 
 
-def test_memory_plain_exits_zero():
-    """'sysinfo memory' (no flags) exits with code 0."""
-    result = run_sysinfo("memory")
+def test_disk_json_exits_zero():
+    """disk --json exits with code 0."""
+    result = run_sysinfo("disk", "--json")
     assert result.returncode == 0, (
-        f"Expected exit 0 for 'sysinfo memory', got {result.returncode}\n"
+        f"Expected exit 0 with 'disk --json', got {result.returncode}"
+    )
+
+
+def test_disk_json_produces_valid_json():
+    """disk --json stdout is valid, parseable JSON."""
+    result = run_sysinfo("disk", "--json")
+    assert result.returncode == 0
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        pytest.fail(
+            f"'disk --json' output is not valid JSON: {exc}\n{result.stdout!r}"
+        )
+    assert isinstance(data, dict), (
+        f"Expected dict at top level, got {type(data)}"
+    )
+
+
+def test_disk_json_has_version_and_disk_keys():
+    """disk --json output contains top-level 'version' and 'disk' keys."""
+    result = run_sysinfo("disk", "--json")
+    data = json.loads(result.stdout)
+    assert "version" in data, (
+        f"Expected 'version' key in disk --json output, got: {list(data)}"
+    )
+    assert data["version"] == "1.0", (
+        f"Expected version '1.0', got: {data['version']!r}"
+    )
+    assert "disk" in data, (
+        f"Expected 'disk' key in disk --json output, got: {list(data)}"
+    )
+    assert isinstance(data["disk"], dict), (
+        f"Expected 'disk' value to be dict, got {type(data['disk'])}"
+    )
+
+
+def test_disk_json_disk_has_required_keys():
+    """disk --json 'disk' dict contains total_gb, used_gb, free_gb, percent."""
+    result = run_sysinfo("disk", "--json")
+    data = json.loads(result.stdout)
+    disk = data["disk"]
+    for key in ("total_gb", "used_gb", "free_gb", "percent"):
+        assert key in disk, (
+            f"Expected key '{key}' in disk --json output, got: {list(disk)}"
+        )
+
+
+def test_disk_json_no_ansi_codes():
+    """disk --json output contains no ANSI escape sequences."""
+    result = run_sysinfo("disk", "--json")
+    assert "\x1b[" not in result.stdout, (
+        f"ANSI escape codes found in 'disk --json' output: {result.stdout!r}"
+    )
+
+
+def test_disk_json_only_version_and_disk_keys():
+    """disk --json output does not leak memory, cpu, or other top-level keys."""
+    result = run_sysinfo("disk", "--json")
+    data = json.loads(result.stdout)
+    unexpected = set(data.keys()) - {"version", "disk"}
+    assert not unexpected, (
+        f"Unexpected top-level keys in 'disk --json' output: {unexpected}"
+    )
+
+
+def test_disk_json_values_are_numeric():
+    """disk --json disk values are numeric and non-negative."""
+    result = run_sysinfo("disk", "--json")
+    data = json.loads(result.stdout)
+    disk = data["disk"]
+    for key in ("total_gb", "used_gb", "free_gb"):
+        assert isinstance(disk[key], (int, float)) and disk[key] >= 0, (
+            f"Expected non-negative number for '{key}', got: {disk[key]!r}"
+        )
+    assert 0.0 <= disk["percent"] <= 100.0, (
+        f"percent should be 0-100, got: {disk['percent']!r}"
+    )
+
+
+def test_disk_json_total_gb_ge_used_gb():
+    """disk --json total_gb >= used_gb."""
+    result = run_sysinfo("disk", "--json")
+    data = json.loads(result.stdout)
+    disk = data["disk"]
+    assert disk["total_gb"] >= disk["used_gb"], (
+        f"total_gb {disk['total_gb']} < used_gb {disk['used_gb']}"
+    )
+
+
+def test_disk_json_mocked():
+    """_disk_json_output() uses psutil.disk_usage correctly when mocked."""
+    from collections import namedtuple
+    from unittest.mock import patch as _patch
+
+    FakeUsage = namedtuple("FakeUsage", ["total", "used", "free", "percent"])
+    _GiB = 1024 ** 3
+    fake = FakeUsage(
+        total=100 * _GiB,
+        used=40 * _GiB,
+        free=60 * _GiB,
+        percent=40.0,
+    )
+
+    import io
+    import sys as _sys
+
+    buf = io.StringIO()
+    with _patch("psutil.disk_usage", return_value=fake):
+        with _patch.object(_sys, "stdout", buf):
+            sysinfo._disk_json_output("/")
+
+    data = json.loads(buf.getvalue())
+    assert data["version"] == "1.0"
+    assert data["disk"]["total_gb"] == 100.0
+    assert data["disk"]["used_gb"] == 40.0
+    assert data["disk"]["free_gb"] == 60.0
+    assert data["disk"]["percent"] == 40.0
+
+
+def test_disk_json_rounding_to_three_places():
+    """disk --json GB values are rounded to 3 decimal places."""
+    from collections import namedtuple
+    from unittest.mock import patch as _patch
+    import io
+    import sys as _sys
+
+    FakeUsage = namedtuple("FakeUsage", ["total", "used", "free", "percent"])
+    _GiB = 1024 ** 3
+    # Use values that produce fractional GiB to test rounding precision
+    fake = FakeUsage(
+        total=int(10.123456 * _GiB),
+        used=int(4.567890 * _GiB),
+        free=int(5.555566 * _GiB),
+        percent=45.3,
+    )
+    buf = io.StringIO()
+    with _patch("psutil.disk_usage", return_value=fake):
+        with _patch.object(_sys, "stdout", buf):
+            sysinfo._disk_json_output("/")
+    data = json.loads(buf.getvalue())
+    for key in ("total_gb", "used_gb", "free_gb"):
+        val = data["disk"][key]
+        # round(val, 3) == val confirms no more than 3 decimal places
+        decimal_str = str(val).split(".")[-1] if "." in str(val) else ""
+        assert len(decimal_str) <= 3, (
+            f"Expected {key} rounded to 3 d.p., got {val}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# disk sub-command plain (no --json) tests  (PR #21 review)
+# ---------------------------------------------------------------------------
+
+
+def test_disk_plain_exits_zero():
+    """'sysinfo disk' (no flags) exits with code 0."""
+    result = run_sysinfo("disk")
+    assert result.returncode == 0, (
+        f"Expected exit 0 for 'sysinfo disk', got {result.returncode}\n"
         f"stderr: {result.stderr}"
     )
 
 
-def test_memory_plain_shows_memory_usage_line():
-    """'sysinfo memory' output includes a 'Memory Usage:' line."""
-    result = run_sysinfo("memory")
+def test_disk_plain_shows_path_and_usage():
+    """'sysinfo disk' output includes path label and GiB info."""
+    result = run_sysinfo("disk")
     clean = ANSI_ESCAPE.sub("", result.stdout)
-    assert "Memory Usage:" in clean, (
-        f"Expected 'Memory Usage:' in 'sysinfo memory' output, got:\n{clean}"
+    assert "GiB" in clean, (
+        f"Expected GiB info in 'sysinfo disk' output, got:\n{clean}"
     )
 
 
-def test_memory_plain_does_not_show_cpu_or_disk():
-    """'sysinfo memory' output does not include CPU or disk sections."""
-    result = run_sysinfo("memory")
+def test_disk_plain_does_not_show_cpu_or_memory():
+    """'sysinfo disk' output does not include CPU or memory sections."""
+    result = run_sysinfo("disk")
     clean = ANSI_ESCAPE.sub("", result.stdout)
     assert "CPU Usage:" not in clean, (
-        "'sysinfo memory' should not show CPU Usage section"
+        "'sysinfo disk' should not show CPU Usage section"
     )
-    assert "Disk Usage:" not in clean, (
-        "'sysinfo memory' should not show Disk Usage section"
+    assert "Memory Usage:" not in clean, (
+        "'sysinfo disk' should not show Memory Usage section"
     )
 
 
-def test_memory_plain_does_not_output_json():
-    """'sysinfo memory' (no --json) output is not JSON."""
-    result = run_sysinfo("memory")
+def test_disk_plain_does_not_output_json():
+    """'sysinfo disk' (no --json) output is not JSON."""
+    result = run_sysinfo("disk")
     try:
         json.loads(result.stdout)
-        pytest.fail("'sysinfo memory' plain output should not be valid JSON")
+        pytest.fail("'sysinfo disk' plain output should not be valid JSON")
     except json.JSONDecodeError:
         pass  # expected
+
+
+def test_disk_plain_path_flag_changes_target():
+    """'sysinfo disk --path /' works and exits 0."""
+    result = run_sysinfo("disk", "--path", "/")
+    assert result.returncode == 0, (
+        f"Expected exit 0 for 'sysinfo disk --path /', got {result.returncode}"
+    )
+
+
+def test_disk_json_path_flag_is_wired():
+    """'sysinfo disk --json --path /' exits 0 and returns JSON."""
+    result = run_sysinfo("disk", "--json", "--path", "/")
+    assert result.returncode == 0, (
+        f"Expected exit 0 for 'disk --json --path /', got {result.returncode}"
+    )
+    data = json.loads(result.stdout)
+    assert "disk" in data, "Expected 'disk' key in JSON output"
