@@ -34,7 +34,7 @@ sysinfo --top 5
 # Suppress process list
 sysinfo --top 0
 
-# JSON output (memory + disk metrics)
+# JSON full snapshot (python_version, cpu, memory, disk, top_processes)
 sysinfo --json
 
 # Print only the Python interpreter version
