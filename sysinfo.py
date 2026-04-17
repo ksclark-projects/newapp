@@ -20,6 +20,15 @@ def format_header(text: str) -> str:
     )
 
 
+def format_label(label: str) -> str:
+    """Return *label* wrapped in yellow ANSI codes for key labels."""
+    return (
+        colorama.Fore.YELLOW
+        + label
+        + colorama.Style.RESET_ALL
+    )
+
+
 def get_os_version() -> str:
     """Return a formatted OS version string.
 
@@ -64,8 +73,8 @@ def main() -> int:
         print(get_python_version())
         return 0
 
-    print(f"{format_header('OS Version:')} {get_os_version()}")
-    print(f"{format_header('Python:')} {get_python_version()}")
+    print(f"{format_label('OS Version:')} {get_os_version()}")
+    print(f"{format_label('Python:')} {get_python_version()}")
     return 0
 
 
