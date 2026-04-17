@@ -155,3 +155,48 @@ def test_get_os_version_fallback_on_empty_system():
     assert result == "Unknown", (
         f"Expected 'Unknown' when system is empty, got: {result!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Section header colorization tests
+# ---------------------------------------------------------------------------
+
+
+def test_format_header_contains_ansi_codes():
+    """format_header() output must contain ANSI escape sequences."""
+    result = sysinfo.format_header("OS Version:")
+    assert "\x1b[" in result, (
+        f"Expected ANSI escape codes in format_header output, got: {result!r}"
+    )
+
+
+def test_format_header_preserves_text():
+    """format_header() must include the original text unchanged."""
+    label = "OS Version:"
+    result = sysinfo.format_header(label)
+    assert label in result, (
+        f"Expected {label!r} to appear in format_header output, got: {result!r}"
+    )
+
+
+def test_format_header_ends_with_reset():
+    """format_header() output must end with a reset sequence."""
+    import colorama as _colorama
+    result = sysinfo.format_header("Python:")
+    assert result.endswith(_colorama.Style.RESET_ALL), (
+        f"format_header output should end with RESET_ALL, got: {result!r}"
+    )
+
+
+def test_no_args_value_text_is_plain():
+    """Non-label value text (e.g. version string) must not be wrapped in ANSI."""
+    result = run_sysinfo()
+    # Strip header ANSI: split each line on RESET_ALL (\x1b[0m) and check
+    # that the value portion (after the reset) has no further escape codes.
+    for line in result.stdout.splitlines():
+        reset = "\x1b[0m"
+        if reset in line:
+            value_part = line.split(reset, 1)[1]
+            assert "\x1b[" not in value_part, (
+                f"Value portion of line should be plain text, got: {line!r}"
+            )
