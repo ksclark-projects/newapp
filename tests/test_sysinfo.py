@@ -145,3 +145,17 @@ def test_get_os_version_fallback_on_empty_mac_ver():
     assert "Linux" in result or result == "Unknown", (
         f"Unexpected fallback value: {result!r}"
     )
+
+
+def test_get_os_version_fallback_on_empty_system():
+    """get_os_version returns 'Unknown' when platform.system() returns empty."""
+    import sysinfo
+
+    with patch("platform.system", return_value=""), \
+         patch("platform.release", return_value=""), \
+         patch("platform.mac_ver", return_value=("", ("", "", ""), "")):
+        result = sysinfo.get_os_version()
+
+    assert result == "Unknown", (
+        f"Expected 'Unknown' when system is empty, got: {result!r}"
+    )
