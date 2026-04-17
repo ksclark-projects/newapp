@@ -942,6 +942,7 @@ def test_mem_pct_zero_total_does_not_crash():
         import argparse as _argparse
 
         class _Args:
+            command = None
             json = False
             python_version = False
             top = 0
@@ -966,3 +967,188 @@ def test_json_cpu_overall_is_mean_of_cores():
             f"cpu.overall ({data['cpu']['overall']}) does not match "
             f"mean of cpu.cores ({expected_mean})"
         )
+
+
+# ---------------------------------------------------------------------------
+# cpu sub-command --json tests  (newapp-odd.1 / US-001)
+# ---------------------------------------------------------------------------
+
+
+def test_cpu_json_exits_zero():
+    """cpu --json exits with code 0."""
+    result = run_sysinfo("cpu", "--json")
+    assert result.returncode == 0, (
+        f"Expected exit 0 with 'cpu --json', got {result.returncode}"
+    )
+
+
+def test_cpu_json_produces_valid_json():
+    """cpu --json stdout is valid JSON."""
+    result = run_sysinfo("cpu", "--json")
+    assert result.returncode == 0
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        pytest.fail(f"'cpu --json' output is not valid JSON: {exc}\n{result.stdout!r}")
+    assert isinstance(data, dict), (
+        f"Expected dict at top level, got {type(data)}"
+    )
+
+
+def test_cpu_json_has_version_key():
+    """cpu --json output contains a 'version' key."""
+    result = run_sysinfo("cpu", "--json")
+    data = json.loads(result.stdout)
+    assert "version" in data, (
+        f"Expected 'version' key in cpu --json output, got: {list(data)}"
+    )
+    assert data["version"] == "1.0", (
+        f"Expected version '1.0', got: {data['version']!r}"
+    )
+
+
+def test_cpu_json_has_cpu_key():
+    """cpu --json output contains a 'cpu' key."""
+    result = run_sysinfo("cpu", "--json")
+    data = json.loads(result.stdout)
+    assert "cpu" in data, (
+        f"Expected 'cpu' key in cpu --json output, got: {list(data)}"
+    )
+    assert isinstance(data["cpu"], dict), (
+        f"Expected 'cpu' value to be dict, got {type(data['cpu'])}"
+    )
+
+
+def test_cpu_json_cpu_has_overall_and_cores():
+    """cpu --json cpu object has 'overall' (float) and 'cores' (list)."""
+    result = run_sysinfo("cpu", "--json")
+    data = json.loads(result.stdout)
+    cpu = data["cpu"]
+    assert "overall" in cpu, f"Expected 'overall' in cpu object: {cpu!r}"
+    assert "cores" in cpu, f"Expected 'cores' in cpu object: {cpu!r}"
+    assert isinstance(cpu["overall"], float), (
+        f"Expected cpu.overall to be float, got {type(cpu['overall'])}"
+    )
+    assert isinstance(cpu["cores"], list), (
+        f"Expected cpu.cores to be list, got {type(cpu['cores'])}"
+    )
+    assert len(cpu["cores"]) > 0, "Expected at least one entry in cpu.cores"
+
+
+def test_cpu_json_cores_values_in_range():
+    """cpu --json cpu.cores values are floats in 0.0–100.0."""
+    result = run_sysinfo("cpu", "--json")
+    data = json.loads(result.stdout)
+    for i, pct in enumerate(data["cpu"]["cores"]):
+        assert isinstance(pct, float), (
+            f"Core {i} should be float, got {type(pct)}: {pct!r}"
+        )
+        assert 0.0 <= pct <= 100.0, (
+            f"Core {i} percentage {pct} out of range [0.0, 100.0]"
+        )
+
+
+def test_cpu_json_overall_in_range():
+    """cpu --json cpu.overall is a float in 0.0–100.0."""
+    result = run_sysinfo("cpu", "--json")
+    data = json.loads(result.stdout)
+    overall = data["cpu"]["overall"]
+    assert 0.0 <= overall <= 100.0, (
+        f"cpu.overall {overall} out of expected range [0.0, 100.0]"
+    )
+
+
+def test_cpu_json_no_ansi_codes():
+    """cpu --json output contains no ANSI escape sequences."""
+    result = run_sysinfo("cpu", "--json")
+    assert "\x1b[" not in result.stdout, (
+        f"ANSI escape codes found in 'cpu --json' output: {result.stdout!r}"
+    )
+
+
+def test_cpu_json_only_contains_version_and_cpu_keys():
+    """cpu --json output does not leak memory, disk, or other top-level keys."""
+    result = run_sysinfo("cpu", "--json")
+    data = json.loads(result.stdout)
+    unexpected = set(data.keys()) - {"version", "cpu"}
+    assert not unexpected, (
+        f"Unexpected top-level keys in 'cpu --json' output: {unexpected}"
+    )
+
+
+def test_cpu_json_overall_is_mean_of_cores():
+    """cpu --json cpu.overall equals the mean of cpu.cores (consistency check)."""
+    result = run_sysinfo("cpu", "--json")
+    data = json.loads(result.stdout)
+    cores = data["cpu"]["cores"]
+    if cores:
+        expected_mean = sum(cores) / len(cores)
+        assert abs(data["cpu"]["overall"] - expected_mean) < 1e-9, (
+            f"cpu.overall ({data['cpu']['overall']}) does not equal "
+            f"mean of cpu.cores ({expected_mean})"
+        )
+
+
+def test_cpu_json_core_count_matches_psutil():
+    """cpu --json cpu.cores length matches psutil.cpu_count(logical=True)."""
+    result = run_sysinfo("cpu", "--json")
+    data = json.loads(result.stdout)
+    expected = psutil.cpu_count(logical=True)
+    assert len(data["cpu"]["cores"]) == expected, (
+        f"Expected {expected} core entries, got {len(data['cpu']['cores'])}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# cpu sub-command plain (no --json) tests  (PR #19 review)
+# ---------------------------------------------------------------------------
+
+
+def test_cpu_plain_exits_zero():
+    """'sysinfo cpu' (no flags) exits with code 0."""
+    result = run_sysinfo("cpu")
+    assert result.returncode == 0, (
+        f"Expected exit 0 for 'sysinfo cpu', got {result.returncode}\n"
+        f"stderr: {result.stderr}"
+    )
+
+
+def test_cpu_plain_shows_cpu_usage_line():
+    """'sysinfo cpu' output includes a 'CPU Usage:' line."""
+    result = run_sysinfo("cpu")
+    clean = ANSI_ESCAPE.sub("", result.stdout)
+    assert "CPU Usage:" in clean, (
+        f"Expected 'CPU Usage:' in 'sysinfo cpu' output, got:\n{clean}"
+    )
+
+
+def test_cpu_plain_shows_core_lines():
+    """'sysinfo cpu' output includes at least one 'Core N:' line."""
+    result = run_sysinfo("cpu")
+    clean = ANSI_ESCAPE.sub("", result.stdout)
+    core_lines = [ln for ln in clean.splitlines() if "Core " in ln and ":" in ln]
+    assert len(core_lines) > 0, (
+        "Expected at least one 'Core N:' line in 'sysinfo cpu' output"
+    )
+
+
+def test_cpu_plain_does_not_show_memory_or_disk():
+    """'sysinfo cpu' output does not include memory or disk sections."""
+    result = run_sysinfo("cpu")
+    clean = ANSI_ESCAPE.sub("", result.stdout)
+    assert "Memory Usage:" not in clean, (
+        "'sysinfo cpu' should not show Memory Usage section"
+    )
+    assert "Disk Usage:" not in clean, (
+        "'sysinfo cpu' should not show Disk Usage section"
+    )
+
+
+def test_cpu_plain_does_not_output_json():
+    """'sysinfo cpu' (no --json) output is not JSON."""
+    result = run_sysinfo("cpu")
+    try:
+        json.loads(result.stdout)
+        pytest.fail("'sysinfo cpu' plain output should not be valid JSON")
+    except json.JSONDecodeError:
+        pass  # expected
