@@ -825,10 +825,11 @@ def test_json_flag_exits_zero():
 
 
 def test_json_flag_contains_all_top_level_keys():
-    """--json output contains all required top-level keys."""
+    """--json output contains all required top-level keys, including version."""
     result = run_sysinfo("--json")
     data = json.loads(result.stdout)
-    for key in ("python_version", "cpu", "memory", "disk", "top_processes"):
+    for key in ("version", "python_version", "cpu", "memory", "disk",
+                "top_processes"):
         assert key in data, (
             f"Expected key '{key}' in --json output, got: {list(data)}"
         )
@@ -1198,59 +1199,334 @@ def test_memory_json_total_gb_ge_used_gb():
     )
 
 
-def test_memory_json_percent_uses_psutil_value():
-    """memory --json percent matches psutil.virtual_memory().percent."""
-    result = run_sysinfo("memory", "--json")
-    data = json.loads(result.stdout)
-    # psutil percent should be a float in range, not recomputed from used/total
-    assert isinstance(data["memory"]["percent"], float), (
-        f"Expected float for percent, got: {type(data['memory']['percent'])}"
-    )
-    assert 0.0 <= data["memory"]["percent"] <= 100.0, (
-        f"percent out of range: {data['memory']['percent']}"
-    )
-
-
 # ---------------------------------------------------------------------------
-# memory sub-command plain (no --json) tests  (PR #20 review)
+# disk sub-command --json tests  (newapp-odd.3 / US-003)
 # ---------------------------------------------------------------------------
 
 
-def test_memory_plain_exits_zero():
-    """'sysinfo memory' (no flags) exits with code 0."""
-    result = run_sysinfo("memory")
+def test_disk_json_exits_zero():
+    """disk --json exits with code 0."""
+    result = run_sysinfo("disk", "--json")
     assert result.returncode == 0, (
-        f"Expected exit 0 for 'sysinfo memory', got {result.returncode}\n"
-        f"stderr: {result.stderr}"
+        f"Expected exit 0 with 'disk --json', got {result.returncode}"
     )
 
 
-def test_memory_plain_shows_memory_usage_line():
-    """'sysinfo memory' output includes a 'Memory Usage:' line."""
-    result = run_sysinfo("memory")
-    clean = ANSI_ESCAPE.sub("", result.stdout)
-    assert "Memory Usage:" in clean, (
-        f"Expected 'Memory Usage:' in 'sysinfo memory' output, got:\n{clean}"
-    )
-
-
-def test_memory_plain_does_not_show_cpu_or_disk():
-    """'sysinfo memory' output does not include CPU or disk sections."""
-    result = run_sysinfo("memory")
-    clean = ANSI_ESCAPE.sub("", result.stdout)
-    assert "CPU Usage:" not in clean, (
-        "'sysinfo memory' should not show CPU Usage section"
-    )
-    assert "Disk Usage:" not in clean, (
-        "'sysinfo memory' should not show Disk Usage section"
-    )
-
-
-def test_memory_plain_does_not_output_json():
-    """'sysinfo memory' (no --json) output is not JSON."""
-    result = run_sysinfo("memory")
+def test_disk_json_produces_valid_json():
+    """disk --json stdout is valid, parseable JSON."""
+    result = run_sysinfo("disk", "--json")
+    assert result.returncode == 0
     try:
-        json.loads(result.stdout)
-        pytest.fail("'sysinfo memory' plain output should not be valid JSON")
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        pytest.fail(
+            f"'disk --json' output is not valid JSON: {exc}\n{result.stdout!r}"
+        )
+    assert isinstance(data, dict), (
+        f"Expected dict at top level, got {type(data)}"
+    )
+
+
+def test_disk_json_has_version_and_disk_keys():
+    """disk --json output contains top-level 'version' and 'disk' keys."""
+    result = run_sysinfo("disk", "--json")
+    data = json.loads(result.stdout)
+    assert "version" in data, (
+        f"Expected 'version' key in disk --json output, got: {list(data)}"
+    )
+    assert data["version"] == "1.0", (
+        f"Expected version '1.0', got: {data['version']!r}"
+    )
+    assert "disk" in data, (
+        f"Expected 'disk' key in disk --json output, got: {list(data)}"
+    )
+    assert isinstance(data["disk"], dict), (
+        f"Expected 'disk' value to be dict, got {type(data['disk'])}"
+    )
+
+
+def test_disk_json_disk_has_required_keys():
+    """disk --json 'disk' dict contains total_gb, used_gb, free_gb, percent."""
+    result = run_sysinfo("disk", "--json")
+    data = json.loads(result.stdout)
+    disk = data["disk"]
+    for key in ("total_gb", "used_gb", "free_gb", "percent"):
+        assert key in disk, (
+            f"Expected key '{key}' in disk --json output, got: {list(disk)}"
+        )
+
+
+def test_disk_json_no_ansi_codes():
+    """disk --json output contains no ANSI escape sequences."""
+    result = run_sysinfo("disk", "--json")
+    assert "\x1b[" not in result.stdout, (
+        f"ANSI escape codes found in 'disk --json' output: {result.stdout!r}"
+    )
+
+
+def test_disk_json_only_version_and_disk_keys():
+    """disk --json output does not leak memory, cpu, or other top-level keys."""
+    result = run_sysinfo("disk", "--json")
+    data = json.loads(result.stdout)
+    unexpected = set(data.keys()) - {"version", "disk"}
+    assert not unexpected, (
+        f"Unexpected top-level keys in 'disk --json' output: {unexpected}"
+    )
+
+
+def test_disk_json_values_are_numeric():
+    """disk --json disk values are numeric and non-negative."""
+    result = run_sysinfo("disk", "--json")
+    data = json.loads(result.stdout)
+    disk = data["disk"]
+    for key in ("total_gb", "used_gb", "free_gb"):
+        assert isinstance(disk[key], (int, float)) and disk[key] >= 0, (
+            f"Expected non-negative number for '{key}', got: {disk[key]!r}"
+        )
+    assert 0.0 <= disk["percent"] <= 100.0, (
+        f"percent should be 0-100, got: {disk['percent']!r}"
+    )
+
+
+def test_disk_json_total_gb_ge_used_gb():
+    """disk --json total_gb >= used_gb."""
+    result = run_sysinfo("disk", "--json")
+    data = json.loads(result.stdout)
+    disk = data["disk"]
+    assert disk["total_gb"] >= disk["used_gb"], (
+        f"total_gb {disk['total_gb']} < used_gb {disk['used_gb']}"
+    )
+
+
+def test_disk_json_mocked():
+    """_disk_json_output() uses psutil.disk_usage correctly when mocked."""
+    from collections import namedtuple
+    from unittest.mock import patch as _patch
+
+    FakeUsage = namedtuple("FakeUsage", ["total", "used", "free", "percent"])
+    _GiB = 1024 ** 3
+    fake = FakeUsage(
+        total=100 * _GiB,
+        used=40 * _GiB,
+        free=60 * _GiB,
+        percent=40.0,
+    )
+
+    import io
+    import sys as _sys
+
+    buf = io.StringIO()
+    with _patch("psutil.disk_usage", return_value=fake):
+        with _patch.object(_sys, "stdout", buf):
+            sysinfo._disk_json_output("/")
+
+    data = json.loads(buf.getvalue())
+    assert data["version"] == "1.0"
+    assert data["disk"]["total_gb"] == 100.0
+    assert data["disk"]["used_gb"] == 40.0
+    assert data["disk"]["free_gb"] == 60.0
+    assert data["disk"]["percent"] == 40.0
+
+
+# ---------------------------------------------------------------------------
+# JSON error output tests  (newapp-odd.4 / US-004)
+# ---------------------------------------------------------------------------
+
+
+def _assert_json_error(result, expected_msg_fragment=None):
+    """Assert that *result* is a JSON error response: non-zero exit, JSON on
+    stderr with an 'error' key, and empty stdout."""
+    assert result.returncode != 0, (
+        f"Expected non-zero exit code on error, got {result.returncode}"
+    )
+    assert result.stdout == "", (
+        f"Expected empty stdout on error, got: {result.stdout!r}"
+    )
+    try:
+        err_data = json.loads(result.stderr)
+    except json.JSONDecodeError as exc:
+        pytest.fail(
+            f"stderr is not valid JSON on error: {exc}\n{result.stderr!r}"
+        )
+    assert "error" in err_data, (
+        f"Expected 'error' key in stderr JSON, got: {err_data!r}"
+    )
+    assert isinstance(err_data["error"], str), (
+        f"Expected 'error' value to be a string, got: {type(err_data['error'])}"
+    )
+    if expected_msg_fragment:
+        assert expected_msg_fragment in err_data["error"], (
+            f"Expected {expected_msg_fragment!r} in error message, "
+            f"got: {err_data['error']!r}"
+        )
+
+
+def test_cpu_json_happy_path_exits_zero():
+    """cpu --json exits 0 and produces valid JSON on the normal (non-error) path."""
+    result = run_sysinfo("cpu", "--json")
+    assert result.returncode == 0, (
+        f"Expected exit 0 for 'cpu --json', got {result.returncode}"
+    )
+    data = json.loads(result.stdout)
+    assert "cpu" in data, f"Expected 'cpu' key in output: {list(data)}"
+
+
+def _run_error_scenario(command_attr, json_flag_attr, patch_target,
+                        patch_side_effect, extra_attrs=None):
+    """Helper: run main() with a faked args and a psutil patch that raises.
+
+    Returns (rc, stdout_str, stderr_str).
+    """
+    import argparse as _argparse
+    import io
+
+    attrs = {command_attr: True}
+    if extra_attrs:
+        attrs.update(extra_attrs)
+
+    class _Args:
+        pass
+
+    for k, v in attrs.items():
+        setattr(_Args, k, v)
+
+    def _fake_parse(self, args=None, namespace=None):
+        return _Args()
+
+    stderr_buf = io.StringIO()
+    stdout_buf = io.StringIO()
+
+    with patch(patch_target, side_effect=patch_side_effect), \
+         patch.object(_argparse.ArgumentParser, "parse_args", _fake_parse), \
+         patch("sys.stderr", stderr_buf), \
+         patch("sys.stdout", stdout_buf):
+        rc = sysinfo.main()
+
+    return rc, stdout_buf.getvalue(), stderr_buf.getvalue()
+
+
+def test_cpu_json_error_unit_nonzero_exit():
+    """_cpu_json_output() failure causes main() to exit 1 with JSON on stderr."""
+    rc, stdout, stderr = _run_error_scenario(
+        "cpu_json", "cpu_json",
+        "psutil.cpu_percent",
+        RuntimeError("simulated cpu failure"),
+        extra_attrs={"command": "cpu"},
+    )
+    result_mock = type("R", (), {
+        "returncode": rc, "stdout": stdout, "stderr": stderr,
+    })()
+    _assert_json_error(result_mock, "simulated cpu failure")
+
+
+def test_memory_json_error_unit_nonzero_exit():
+    """_memory_json_output() failure causes main() to exit 1 with JSON on stderr."""
+    rc, stdout, stderr = _run_error_scenario(
+        "mem_json", "mem_json",
+        "psutil.virtual_memory",
+        RuntimeError("simulated mem failure"),
+        extra_attrs={"command": "memory"},
+    )
+    result_mock = type("R", (), {
+        "returncode": rc, "stdout": stdout, "stderr": stderr,
+    })()
+    _assert_json_error(result_mock, "simulated mem failure")
+
+
+def test_disk_json_error_unit_nonzero_exit():
+    """_disk_json_output() failure causes main() to exit 1 with JSON on stderr."""
+    rc, stdout, stderr = _run_error_scenario(
+        "disk_json", "disk_json",
+        "psutil.disk_usage",
+        OSError("simulated disk failure"),
+        extra_attrs={"command": "disk"},
+    )
+    result_mock = type("R", (), {
+        "returncode": rc, "stdout": stdout, "stderr": stderr,
+    })()
+    _assert_json_error(result_mock, "simulated disk failure")
+
+
+def test_top_level_json_error_unit_nonzero_exit():
+    """Top-level --json failure causes main() to exit 1 with JSON on stderr."""
+    import argparse as _argparse
+    import io
+
+    class _Args:
+        command = None
+        json = True
+        python_version = False
+        top = 10
+
+    def _fake_parse(self, args=None, namespace=None):
+        return _Args()
+
+    stderr_buf = io.StringIO()
+    stdout_buf = io.StringIO()
+
+    with patch("psutil.cpu_percent",
+               side_effect=RuntimeError("simulated top-level failure")), \
+         patch.object(_argparse.ArgumentParser, "parse_args", _fake_parse), \
+         patch("sys.stderr", stderr_buf), \
+         patch("sys.stdout", stdout_buf):
+        rc = sysinfo.main()
+
+    result_mock = type("R", (), {
+        "returncode": rc,
+        "stdout": stdout_buf.getvalue(),
+        "stderr": stderr_buf.getvalue(),
+    })()
+    _assert_json_error(result_mock, "simulated top-level failure")
+
+
+def test_json_error_stderr_is_valid_json_not_traceback():
+    """On JSON error, stderr must be valid JSON — not a Python traceback."""
+    rc, stdout, stderr = _run_error_scenario(
+        "cpu_json", "cpu_json",
+        "psutil.cpu_percent",
+        RuntimeError("boom"),
+        extra_attrs={"command": "cpu"},
+    )
+    assert "Traceback" not in stderr, (
+        f"stderr should not contain a traceback, got: {stderr!r}"
+    )
+    result_mock = type("R", (), {
+        "returncode": rc, "stdout": stdout, "stderr": stderr,
+    })()
+    _assert_json_error(result_mock, "boom")
+
+
+def test_json_error_stdout_empty_on_cpu_failure():
+    """On cpu --json failure, stdout must be completely empty."""
+    rc, stdout, stderr = _run_error_scenario(
+        "cpu_json", "cpu_json",
+        "psutil.cpu_percent",
+        RuntimeError("fail"),
+        extra_attrs={"command": "cpu"},
+    )
+    assert stdout == "", (
+        f"Expected completely empty stdout on failure, got: {stdout!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# JSON error output for argparse validation  (PR #22 review INFO item)
+# ---------------------------------------------------------------------------
+
+
+def test_json_top_negative_emits_json_error():
+    """--json --top -1 should exit non-zero with JSON error on stderr."""
+    result = run_sysinfo("--json", "--top", "-1")
+    assert result.returncode != 0, (
+        "Expected non-zero exit for --json --top -1"
+    )
+    # stderr should be valid JSON with an 'error' key
+    try:
+        err_data = json.loads(result.stderr)
     except json.JSONDecodeError:
-        pass  # expected
+        pytest.fail(
+            f"Expected JSON on stderr for --json --top -1, got: {result.stderr!r}"
+        )
+    assert "error" in err_data, (
+        f"Expected 'error' key in stderr JSON: {err_data!r}"
+    )

@@ -287,6 +287,31 @@ def _memory_json_output() -> None:
     ))
 
 
+def _disk_json_output(path: str = "/") -> None:
+    """Print disk info as a versioned JSON object to stdout (no ANSI codes).
+
+    Note: This returns a single flat dict for the given *path* (default ``/``).
+    The top-level ``sysinfo --json`` snapshot uses ``get_disk_mounts()`` and
+    returns a list of all mount points under the ``"disk"`` key.  The
+    difference is intentional: the sub-command is scoped to one path probe,
+    while the dashboard shows all mounts.
+    """
+    _GiB = 1024 ** 3
+    usage = psutil.disk_usage(path)
+    print(json.dumps(
+        {
+            "version": "1.0",
+            "disk": {
+                "total_gb": round(usage.total / _GiB, 2),
+                "used_gb": round(usage.used / _GiB, 2),
+                "free_gb": round(usage.free / _GiB, 2),
+                "percent": usage.percent,
+            },
+        },
+        indent=2,
+    ))
+
+
 def main() -> int:
     """Entry point for sysinfo CLI."""
     parser = argparse.ArgumentParser(
@@ -342,26 +367,67 @@ def main() -> int:
         ),
     )
 
+    # disk sub-command
+    disk_parser = subparsers.add_parser(
+        "disk",
+        help="Show disk information.",
+    )
+    disk_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="disk_json",
+        help=(
+            "Output disk info as JSON "
+            "({version, disk: {total_gb, used_gb, free_gb, percent}})."
+        ),
+    )
+
     args = parser.parse_args()
 
     # --- cpu sub-command ---
     if args.command == "cpu":
         if args.cpu_json:
-            _cpu_json_output()
+            try:
+                _cpu_json_output()
+            except Exception as exc:
+                print(json.dumps({"error": str(exc)}), file=sys.stderr)
+                return 1
             return 0
 
     # --- memory sub-command ---
     if args.command == "memory":
         if args.mem_json:
-            _memory_json_output()
+            try:
+                _memory_json_output()
+            except Exception as exc:
+                print(json.dumps({"error": str(exc)}), file=sys.stderr)
+                return 1
             return 0
         # No flags: show memory-only plain-text output.
         _memory_plain_output()
         return 0
 
+    # --- disk sub-command ---
+    if args.command == "disk":
+        if args.disk_json:
+            try:
+                _disk_json_output()
+            except Exception as exc:
+                print(json.dumps({"error": str(exc)}), file=sys.stderr)
+                return 1
+            return 0
+
     if args.command is None:
-        # Only validate --top for the top-level (non-sub-command) path.
+        # Validate --top for the top-level (non-sub-command) path.
+        # When --json is also active, emit a JSON error instead of the default
+        # plain-text argparse message so callers receive a consistent format.
         if args.top < 0:
+            if args.json:
+                print(
+                    json.dumps({"error": "--top must be >= 0"}),
+                    file=sys.stderr,
+                )
+                return 1
             parser.error("--top must be >= 0")
 
     if args.python_version:
@@ -369,26 +435,29 @@ def main() -> int:
         return 0
 
     if args.json:
-        # Collect per-core percentages in a single psutil call, then derive
-        # the overall figure as the arithmetic mean of per-core values.
-        # This is NOT psutil's time-weighted cpu_percent() — it avoids two
-        # separate 100 ms blocking calls that would produce an inconsistent
-        # overall/cores pair.
-        cores = psutil.cpu_percent(interval=0.1, percpu=True)
-        overall = sum(cores) / len(cores) if cores else 0.0
-        print(json.dumps(
-            {
-                "python_version": get_python_version(),
-                "cpu": {
-                    "overall": overall,
-                    "cores": cores,
+        try:
+            # Collect per-core percentages in a single psutil call, then derive
+            # the overall figure as the mean — avoids two separate 100 ms sleeps
+            # that would otherwise produce an inconsistent overall/cores pair.
+            cores = psutil.cpu_percent(interval=0.1, percpu=True)
+            overall = sum(cores) / len(cores) if cores else 0.0
+            print(json.dumps(
+                {
+                    "version": "1.0",
+                    "python_version": get_python_version(),
+                    "cpu": {
+                        "overall": overall,
+                        "cores": cores,
+                    },
+                    "memory": get_mem_details(),
+                    "disk": get_disk_mounts(),
+                    "top_processes": get_top_processes(args.top),
                 },
-                "memory": get_mem_details(),
-                "disk": get_disk_mounts(),
-                "top_processes": get_top_processes(args.top),
-            },
-            indent=2,
-        ))
+                indent=2,
+            ))
+        except Exception as exc:
+            print(json.dumps({"error": str(exc)}), file=sys.stderr)
+            return 1
         return 0
 
     mem = get_mem_details()
