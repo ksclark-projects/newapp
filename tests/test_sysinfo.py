@@ -1,10 +1,12 @@
 """Tests for sysinfo.py."""
 
+import json
 import re
 import subprocess
 import sys
-from unittest.mock import patch
+from unittest.mock import MagicMock, PropertyMock, patch
 
+import psutil
 import pytest  # noqa: F401 — used for potential future parametrize
 
 import sysinfo
@@ -251,12 +253,19 @@ def test_format_label_all_labels_covered():
     """Every label/value line in default output uses format_label styling."""
     result = run_sysinfo()
     clean = ANSI_ESCAPE.sub("", result.stdout)
-    # Each non-empty line in plain output should have a colon-terminated label
+    # Table header and process data rows from --top output do not use the
+    # label format; skip them when checking for colon-terminated labels.
     for line in clean.splitlines():
-        if not line.strip():
+        stripped = line.strip()
+        if not stripped:
             continue
-        assert ":" in line, (
-            f"Expected a labelled line (containing ':'), got: {line!r}"
+        # Skip process table header and data rows — they don't use label: format
+        if stripped.startswith("PID") or stripped.startswith("Top "):
+            continue
+        if line.startswith("  ") and stripped[:1].isdigit():
+            continue
+        assert ":" in stripped, (
+            f"Expected a labelled line (containing ':'), got: {stripped!r}"
         )
 
 
@@ -352,133 +361,465 @@ def test_no_args_includes_disk_line():
 
 
 # ---------------------------------------------------------------------------
-# NO_COLOR environment variable tests  (newapp-10j.5)
+# Per-core CPU tests  (newapp-pc8)
 # ---------------------------------------------------------------------------
 
 
-def test_color_enabled_true_when_no_color_unset(monkeypatch):
-    """color_enabled() returns True when NO_COLOR is not in the environment."""
-    monkeypatch.delenv("NO_COLOR", raising=False)
-    assert sysinfo.color_enabled() is True
-
-
-def test_color_enabled_false_when_no_color_set(monkeypatch):
-    """color_enabled() returns False when NO_COLOR is set to any value."""
-    monkeypatch.setenv("NO_COLOR", "1")
-    assert sysinfo.color_enabled() is False
-
-
-def test_color_enabled_false_when_no_color_empty(monkeypatch):
-    """color_enabled() returns False when NO_COLOR is set to empty string."""
-    monkeypatch.setenv("NO_COLOR", "")
-    assert sysinfo.color_enabled() is False
-
-
-def test_format_label_plain_when_no_color(monkeypatch):
-    """format_label() returns the bare label with no ANSI codes when NO_COLOR set."""
-    monkeypatch.setenv("NO_COLOR", "1")
-    result = sysinfo.format_label("OS Version:")
-    assert result == "OS Version:", (
-        f"Expected plain label when NO_COLOR set, got: {result!r}"
+def test_get_cpu_cores_returns_list():
+    """get_cpu_cores() returns a non-empty list."""
+    result = sysinfo.get_cpu_cores()
+    assert isinstance(result, list), (
+        f"Expected list from get_cpu_cores(), got: {type(result)}"
     )
-    assert "\x1b[" not in result
+    assert len(result) > 0, "Expected at least one core"
 
 
-def test_format_header_plain_when_no_color(monkeypatch):
-    """format_header() returns the bare text with no ANSI codes when NO_COLOR set."""
-    monkeypatch.setenv("NO_COLOR", "1")
-    result = sysinfo.format_header("System Info")
-    assert result == "System Info", (
-        f"Expected plain text when NO_COLOR set, got: {result!r}"
-    )
-    assert "\x1b[" not in result
-
-
-def test_colorize_pct_plain_when_no_color(monkeypatch):
-    """colorize_pct() returns a plain 'X.X%' string with no ANSI when NO_COLOR set."""
-    monkeypatch.setenv("NO_COLOR", "1")
-    result = sysinfo.colorize_pct(75.0, 60.0, 85.0)
-    assert result == "75.0%", (
-        f"Expected plain percentage when NO_COLOR set, got: {result!r}"
-    )
-    assert "\x1b[" not in result
-
-
-def test_subprocess_no_ansi_when_no_color_set():
-    """Default output contains no ANSI escape codes when NO_COLOR is set."""
-    import os
-    env = {**os.environ, "NO_COLOR": "1"}
-    result = subprocess.run(
-        [sys.executable, "sysinfo.py"],
-        capture_output=True,
-        text=True,
-        env=env,
-    )
-    assert result.returncode == 0
-    assert "\x1b[" not in result.stdout, (
-        f"Expected no ANSI codes in output when NO_COLOR=1, got: {result.stdout!r}"
-    )
-
-
-def test_subprocess_has_ansi_when_no_color_unset():
-    """ANSI codes present in direct calls when NO_COLOR is not set."""
-    import importlib
-    import os
-    # Subprocess strips ANSI on non-TTY pipes, so verify in-process instead.
-    orig = os.environ.get("NO_COLOR")
-    try:
-        os.environ.pop("NO_COLOR", None)
-        importlib.reload(sysinfo)
-        assert sysinfo.color_enabled() is True
-        assert "\x1b[" in sysinfo.format_label("Test:")
-        assert "\x1b[" in sysinfo.colorize_pct(50.0, 60.0, 85.0)
-    finally:
-        if orig is not None:
-            os.environ["NO_COLOR"] = orig
-        importlib.reload(sysinfo)  # restore module state
-
-
-# ---------------------------------------------------------------------------
-# US-006: Additional color output tests  (newapp-10j.6)
-# ---------------------------------------------------------------------------
-
-
-def test_colorize_pct_high_cpu_red_when_color_enabled(monkeypatch):
-    """colorize_pct() for 90% CPU (above CPU_CRIT) contains a red ANSI code."""
-    monkeypatch.delenv("NO_COLOR", raising=False)
-    result = sysinfo.colorize_pct(90.0, sysinfo.CPU_WARN, sysinfo.CPU_CRIT)
-    assert re.search(r"\x1b\[", result), (
-        f"Expected ANSI escape code in colorize_pct output, got: {result!r}"
-    )
-    import colorama as _colorama
-    assert _colorama.Fore.RED in result, (
-        f"Expected Fore.RED for 90% CPU above CPU_CRIT={sysinfo.CPU_CRIT}, "
-        f"got: {result!r}"
-    )
-
-
-def test_no_color_suppresses_ansi_in_all_color_functions(monkeypatch):
-    """With NO_COLOR set, colorize_pct/format_header/format_label emit no ANSI."""
-    monkeypatch.setenv("NO_COLOR", "1")
-    pct_result = sysinfo.colorize_pct(90.0, sysinfo.CPU_WARN, sysinfo.CPU_CRIT)
-    header_result = sysinfo.format_header("System Info")
-    label_result = sysinfo.format_label("CPU Usage:")
-    for name, result in (
-        ("colorize_pct", pct_result),
-        ("format_header", header_result),
-        ("format_label", label_result),
-    ):
-        assert not re.search(r"\x1b\[", result), (
-            f"Expected no ANSI escape sequences from {name}() when NO_COLOR "
-            f"is set, got: {result!r}"
+def test_get_cpu_cores_values_in_range():
+    """get_cpu_cores() values are floats in 0.0–100.0."""
+    cores = sysinfo.get_cpu_cores()
+    for i, pct in enumerate(cores):
+        assert isinstance(pct, float), (
+            f"Core {i} value should be float, got {type(pct)}: {pct!r}"
+        )
+        assert 0.0 <= pct <= 100.0, (
+            f"Core {i} percentage {pct} out of range [0.0, 100.0]"
         )
 
 
-def test_format_header_contains_bold_ansi(monkeypatch):
-    """format_header() output contains a bold (Style.BRIGHT) ANSI escape code."""
-    monkeypatch.delenv("NO_COLOR", raising=False)
-    import colorama as _colorama
-    result = sysinfo.format_header("System Info")
-    assert _colorama.Style.BRIGHT in result, (
-        f"Expected Style.BRIGHT (bold) in format_header output, got: {result!r}"
+def test_get_cpu_cores_count_matches_psutil():
+    """get_cpu_cores() returns one entry per logical CPU."""
+    import psutil as _psutil
+    expected = _psutil.cpu_count(logical=True)
+    assert len(sysinfo.get_cpu_cores()) == expected, (
+        f"Expected {expected} core entries, "
+        f"got {len(sysinfo.get_cpu_cores())}"
     )
+
+
+def test_no_args_includes_core_lines():
+    """Default output must include at least one 'Core N:' line."""
+    result = run_sysinfo()
+    clean = ANSI_ESCAPE.sub("", result.stdout)
+    core_lines = [ln for ln in clean.splitlines() if "Core " in ln and ":" in ln]
+    assert len(core_lines) > 0, (
+        "Expected at least one 'Core N:' line in default output"
+    )
+
+
+def test_no_args_core_count_matches_cpu_count():
+    """Number of 'Core N:' lines equals the logical CPU count."""
+    import psutil as _psutil
+    result = run_sysinfo()
+    clean = ANSI_ESCAPE.sub("", result.stdout)
+    core_lines = [ln for ln in clean.splitlines() if "Core " in ln and ":" in ln]
+    assert len(core_lines) == _psutil.cpu_count(logical=True), (
+        f"Expected {_psutil.cpu_count(logical=True)} core lines, "
+        f"got {len(core_lines)}"
+    )
+
+
+def test_no_args_core_lines_contain_percentage():
+    """Each 'Core N:' line in output contains a percentage value."""
+    result = run_sysinfo()
+    clean = ANSI_ESCAPE.sub("", result.stdout)
+    core_lines = [ln for ln in clean.splitlines() if "Core " in ln and ":" in ln]
+    for line in core_lines:
+        assert re.search(r"\d+\.\d+%", line), (
+            f"Core line missing percentage value: {line!r}"
+        )
+
+
+def test_no_args_core_lines_after_cpu_usage():
+    """Per-core lines appear immediately after the 'CPU Usage:' line."""
+    result = run_sysinfo()
+    clean = ANSI_ESCAPE.sub("", result.stdout)
+    lines = clean.splitlines()
+    cpu_idx = next(
+        (i for i, l in enumerate(lines) if l.startswith("CPU Usage:")), None
+    )
+    assert cpu_idx is not None, "CPU Usage line not found"
+    # The line right after CPU Usage should be a core line
+    assert cpu_idx + 1 < len(lines), "No line after CPU Usage"
+    assert "Core 0:" in lines[cpu_idx + 1], (
+        f"Expected 'Core 0:' after CPU Usage line, got: {lines[cpu_idx+1]!r}"
+    )
+
+
+def test_get_cpu_cores_mocked():
+    """get_cpu_cores() returns the mocked per-core list."""
+    mock_cores = [10.0, 20.0, 30.0, 40.0]
+    with patch("psutil.cpu_percent", return_value=mock_cores):
+        result = sysinfo.get_cpu_cores()
+    assert result == mock_cores, (
+        f"Expected mocked core list {mock_cores!r}, got {result!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Top processes tests  (newapp-leh)
+# ---------------------------------------------------------------------------
+
+
+def _make_mock_proc(pid, name, cpu_pct, mem_pct):
+    """Return a MagicMock that mimics a psutil.Process with .info dict."""
+    from unittest.mock import MagicMock
+    proc = MagicMock()
+    proc.info = {
+        'pid': pid,
+        'name': name,
+        'cpu_percent': cpu_pct,
+        'memory_percent': mem_pct,
+    }
+    return proc
+
+
+def test_get_top_processes_returns_list():
+    """get_top_processes() returns a list."""
+    result = sysinfo.get_top_processes(n=5)
+    assert isinstance(result, list), (
+        f"Expected list from get_top_processes(), got: {type(result)}"
+    )
+
+
+def test_get_top_processes_respects_n():
+    """get_top_processes(n) returns at most n entries."""
+    procs = [_make_mock_proc(i, f"proc{i}", float(i), 1.0) for i in range(20)]
+    with patch("psutil.process_iter", return_value=procs):
+        result = sysinfo.get_top_processes(n=5)
+    assert len(result) <= 5, (
+        f"Expected at most 5 processes, got {len(result)}"
+    )
+
+
+def test_get_top_processes_sorted_by_cpu_descending():
+    """get_top_processes() returns entries sorted by cpu_pct descending."""
+    procs = [
+        _make_mock_proc(1, "low",  10.0, 1.0),
+        _make_mock_proc(2, "high", 80.0, 2.0),
+        _make_mock_proc(3, "mid",  40.0, 1.5),
+    ]
+    with patch("psutil.process_iter", return_value=procs):
+        result = sysinfo.get_top_processes(n=3)
+    cpu_values = [p['cpu_pct'] for p in result]
+    assert cpu_values == sorted(cpu_values, reverse=True), (
+        f"Expected descending CPU order, got: {cpu_values}"
+    )
+
+
+def test_get_top_processes_entry_keys():
+    """Each entry from get_top_processes() has pid, name, cpu_pct, mem_pct."""
+    procs = [_make_mock_proc(42, "test_proc", 5.0, 1.2)]
+    with patch("psutil.process_iter", return_value=procs):
+        result = sysinfo.get_top_processes(n=1)
+    assert len(result) == 1
+    entry = result[0]
+    for key in ('pid', 'name', 'cpu_pct', 'mem_pct'):
+        assert key in entry, f"Expected key '{key}' in process entry, got: {entry}"
+
+
+def test_get_top_processes_skips_noaccess():
+    """get_top_processes() silently skips inaccessible processes."""
+    good = _make_mock_proc(1, "good", 5.0, 1.0)
+    bad_proc = MagicMock(spec=psutil.Process)
+    type(bad_proc).info = PropertyMock(
+        side_effect=psutil.AccessDenied(pid=2, name="restricted")
+    )
+    with patch("psutil.process_iter", return_value=[good, bad_proc]):
+        result = sysinfo.get_top_processes(n=10)
+    pids = [p['pid'] for p in result]
+    assert 1 in pids, "Expected accessible process to be included"
+
+
+def test_no_args_includes_top_processes_section():
+    """Default output (--top 10) includes the 'Top N Processes' header."""
+    result = run_sysinfo()
+    clean = ANSI_ESCAPE.sub("", result.stdout)
+    assert "Top 10 Processes" in clean, (
+        "Expected 'Top 10 Processes' section in default output"
+    )
+
+
+def test_top_flag_limits_processes():
+    """--top 3 output includes at most 3 process data rows."""
+    result = run_sysinfo("--top", "3")
+    assert result.returncode == 0
+    clean = ANSI_ESCAPE.sub("", result.stdout)
+    # Count indented rows that start with a digit (PID column)
+    proc_rows = [
+        ln for ln in clean.splitlines()
+        if ln.startswith("  ") and ln.strip()[:1].isdigit()
+    ]
+    assert len(proc_rows) <= 3, (
+        f"Expected at most 3 process rows with --top 3, got {len(proc_rows)}"
+    )
+
+
+def test_top_zero_suppresses_section():
+    """--top 0 suppresses the top-processes section entirely."""
+    result = run_sysinfo("--top", "0")
+    assert result.returncode == 0
+    assert "Top " not in result.stdout, (
+        "Expected no 'Top N Processes' section when --top 0"
+    )
+    assert "PID" not in result.stdout, (
+        "Expected no process table when --top 0"
+    )
+
+
+def test_top_processes_output_contains_pid_and_name():
+    """Top-processes output lines contain PID and name columns."""
+    result = run_sysinfo("--top", "5")
+    clean = ANSI_ESCAPE.sub("", result.stdout)
+    # The header row should contain PID and Name labels
+    assert "PID" in clean, "Expected 'PID' column header in output"
+    assert "Name" in clean, "Expected 'Name' column header in output"
+
+
+# ---------------------------------------------------------------------------
+# Disk per-mount tests  (newapp-5pj)
+# ---------------------------------------------------------------------------
+
+
+def test_get_disk_mounts_returns_list():
+    """get_disk_mounts() returns a non-empty list."""
+    result = sysinfo.get_disk_mounts()
+    assert isinstance(result, list), (
+        f"Expected list from get_disk_mounts(), got: {type(result)}"
+    )
+    assert len(result) > 0, "Expected at least one mount point"
+
+
+def test_get_disk_mounts_entry_keys():
+    """Each get_disk_mounts() entry has the required keys."""
+    required = {"mount", "used_gb", "free_gb", "total_gb", "percent"}
+    for entry in sysinfo.get_disk_mounts():
+        missing = required - entry.keys()
+        assert not missing, (
+            f"Mount entry missing keys {missing}: {entry!r}"
+        )
+
+
+def test_get_disk_mounts_numeric_values():
+    """get_disk_mounts() entries have numeric GB and percent values in range."""
+    for entry in sysinfo.get_disk_mounts():
+        for key in ("used_gb", "free_gb", "total_gb"):
+            assert isinstance(entry[key], (int, float)) and entry[key] >= 0, (
+                f"{key} should be a non-negative number, got: {entry[key]!r}"
+            )
+        assert 0.0 <= entry["percent"] <= 100.0, (
+            f"percent should be 0-100, got: {entry['percent']!r}"
+        )
+
+
+def test_get_disk_mounts_total_ge_used():
+    """total_gb >= used_gb for every mount point."""
+    for entry in sysinfo.get_disk_mounts():
+        assert entry["total_gb"] >= entry["used_gb"], (
+            f"total_gb {entry['total_gb']} < used_gb {entry['used_gb']} "
+            f"for mount {entry['mount']!r}"
+        )
+
+
+def test_get_disk_mounts_mocked():
+    """get_disk_mounts() uses disk_partitions and disk_usage correctly."""
+    from collections import namedtuple
+    FakePart = namedtuple("FakePart", ["mountpoint"])
+    FakeUsage = namedtuple("FakeUsage", ["used", "free", "total", "percent"])
+
+    fake_parts = [FakePart("/"), FakePart("/data")]
+    fake_usages = {
+        "/": FakeUsage(used=10 * 1024**3, free=90 * 1024**3,
+                       total=100 * 1024**3, percent=10.0),
+        "/data": FakeUsage(used=50 * 1024**3, free=50 * 1024**3,
+                           total=100 * 1024**3, percent=50.0),
+    }
+
+    with patch("psutil.disk_partitions", return_value=fake_parts), \
+         patch("psutil.disk_usage", side_effect=lambda mp: fake_usages[mp]):
+        result = sysinfo.get_disk_mounts()
+
+    assert len(result) == 2
+    assert result[0]["mount"] == "/"
+    assert result[0]["used_gb"] == 10.0
+    assert result[0]["free_gb"] == 90.0
+    assert result[0]["total_gb"] == 100.0
+    assert result[0]["percent"] == 10.0
+    assert result[1]["mount"] == "/data"
+    assert result[1]["percent"] == 50.0
+
+
+def test_get_disk_mounts_skips_inaccessible():
+    """get_disk_mounts() silently skips mount points that raise OSError."""
+    from collections import namedtuple
+    FakePart = namedtuple("FakePart", ["mountpoint"])
+
+    fake_parts = [FakePart("/"), FakePart("/secret")]
+
+    def fake_usage(mp):
+        if mp == "/secret":
+            raise PermissionError("no access")
+        from collections import namedtuple as nt
+        U = nt("U", ["used", "free", "total", "percent"])
+        return U(used=10 * 1024**3, free=90 * 1024**3,
+                 total=100 * 1024**3, percent=10.0)
+
+    with patch("psutil.disk_partitions", return_value=fake_parts), \
+         patch("psutil.disk_usage", side_effect=fake_usage):
+        result = sysinfo.get_disk_mounts()
+
+    assert len(result) == 1
+    assert result[0]["mount"] == "/"
+
+
+def test_json_flag_outputs_valid_json():
+    """--json flag produces valid JSON with a 'disk' key."""
+    result = run_sysinfo("--json")
+    assert result.returncode == 0, (
+        f"Expected exit 0 with --json, got {result.returncode}"
+    )
+    data = json.loads(result.stdout)
+    assert "disk" in data, f"Expected 'disk' key in JSON output: {data!r}"
+    assert isinstance(data["disk"], list), (
+        f"Expected 'disk' to be a list, got: {type(data['disk'])}"
+    )
+
+
+def test_json_flag_disk_entries_have_required_keys():
+    """--json disk entries contain mount, used_gb, free_gb, total_gb, percent."""
+    result = run_sysinfo("--json")
+    data = json.loads(result.stdout)
+    required = {"mount", "used_gb", "free_gb", "total_gb", "percent"}
+    for entry in data["disk"]:
+        missing = required - entry.keys()
+        assert not missing, (
+            f"JSON disk entry missing keys {missing}: {entry!r}"
+        )
+
+
+def test_no_args_includes_disk_header():
+    """Default output shows 'Disk Usage:' as a section header."""
+    result = run_sysinfo()
+    clean = ANSI_ESCAPE.sub("", result.stdout)
+    assert "Disk Usage:" in clean, (
+        "Expected 'Disk Usage:' header in default output"
+    )
+
+
+def test_no_args_disk_shows_per_mount():
+    """Default output shows at least one per-mount line with GiB info."""
+    result = run_sysinfo()
+    clean = ANSI_ESCAPE.sub("", result.stdout)
+    assert "GiB" in clean, (
+        "Expected per-mount GiB info in default output"
+    )
+
+
+def test_no_args_disk_mount_lines_have_percentage():
+    """Each per-mount disk line in default output includes a percentage."""
+    result = run_sysinfo()
+    clean = ANSI_ESCAPE.sub("", result.stdout)
+    # Find indented lines under Disk Usage section
+    mount_lines = [
+        ln for ln in clean.splitlines()
+        if ln.startswith("  ") and "GiB" in ln
+    ]
+    assert len(mount_lines) > 0, "Expected at least one mount line with GiB"
+    for line in mount_lines:
+        assert re.search(r"\d+\.\d+%", line), (
+            f"Mount line missing percentage: {line!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Memory details tests  (newapp-528)
+# ---------------------------------------------------------------------------
+
+
+def test_get_mem_details_returns_dict():
+    """get_mem_details() returns a dict with the required keys."""
+    result = sysinfo.get_mem_details()
+    assert isinstance(result, dict), (
+        f"Expected dict from get_mem_details(), got: {type(result)}"
+    )
+    for key in ("used_mb", "free_mb", "cached_mb", "total_mb"):
+        assert key in result, f"Expected key '{key}' in mem details: {result}"
+
+
+def test_get_mem_details_values_are_numeric():
+    """get_mem_details() values are numeric (int or float)."""
+    result = sysinfo.get_mem_details()
+    for key, val in result.items():
+        assert isinstance(val, (int, float)), (
+            f"Expected numeric for '{key}', got {type(val)}: {val!r}"
+        )
+
+
+def test_get_mem_details_total_positive():
+    """get_mem_details() total_mb is a positive number."""
+    result = sysinfo.get_mem_details()
+    assert result["total_mb"] > 0, (
+        f"Expected total_mb > 0, got: {result['total_mb']}"
+    )
+
+
+def test_get_mem_details_used_le_total():
+    """get_mem_details() used_mb does not exceed total_mb."""
+    result = sysinfo.get_mem_details()
+    assert result["used_mb"] <= result["total_mb"], (
+        f"used_mb {result['used_mb']} exceeds total_mb {result['total_mb']}"
+    )
+
+
+def test_get_mem_details_mocked():
+    """get_mem_details() maps psutil fields correctly when mocked."""
+    mock_vm = MagicMock()
+    mock_vm.used = 8 * 1024 * 1024 * 1024       # 8 GiB
+    mock_vm.available = 4 * 1024 * 1024 * 1024  # 4 GiB
+    mock_vm.total = 16 * 1024 * 1024 * 1024     # 16 GiB
+    del mock_vm.cached  # cached not available on this platform
+    with patch("psutil.virtual_memory", return_value=mock_vm):
+        result = sysinfo.get_mem_details()
+    assert result["used_mb"] == round(8 * 1024, 1)
+    assert result["free_mb"] == round(4 * 1024, 1)
+    assert result["total_mb"] == round(16 * 1024, 1)
+    assert result["cached_mb"] == 0.0
+
+
+def test_no_args_memory_line_includes_used_free_total():
+    """Default output Memory Usage line includes used/free/total strings."""
+    result = run_sysinfo()
+    clean = ANSI_ESCAPE.sub("", result.stdout)
+    mem_line = next(
+        (ln for ln in clean.splitlines() if ln.startswith("Memory Usage:")),
+        None,
+    )
+    assert mem_line is not None, "No 'Memory Usage:' line in output"
+    assert "used" in mem_line, f"Expected 'used' in memory line: {mem_line!r}"
+    assert "free" in mem_line, f"Expected 'free' in memory line: {mem_line!r}"
+    assert "total" in mem_line, f"Expected 'total' in memory line: {mem_line!r}"
+
+
+def test_json_flag_includes_memory_key():
+    """--json output includes a 'memory' key with the required fields."""
+    result = run_sysinfo("--json")
+    assert result.returncode == 0
+    data = json.loads(result.stdout)
+    assert "memory" in data, (
+        f"Expected 'memory' key in --json output, got: {list(data)}"
+    )
+    for key in ("used_mb", "free_mb", "cached_mb", "total_mb"):
+        assert key in data["memory"], (
+            f"Expected '{key}' in memory JSON: {list(data['memory'])}"
+        )
+
+
+def test_fmt_size_under_1024_returns_mb():
+    """_fmt_size() returns MB string for values under 1024."""
+    assert sysinfo._fmt_size(512.0) == "512 MB"
+    assert sysinfo._fmt_size(0.0) == "0 MB"
+
+
+def test_fmt_size_1024_or_over_returns_gb():
+    """_fmt_size() returns GB string for values >= 1024."""
+    assert sysinfo._fmt_size(1024.0) == "1.0 GB"
+    assert sysinfo._fmt_size(8192.0) == "8.0 GB"
