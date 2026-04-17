@@ -349,3 +349,90 @@ def test_no_args_includes_disk_line():
     assert "Disk Usage:" in result.stdout, (
         "Expected 'Disk Usage:' line in default output"
     )
+
+
+# ---------------------------------------------------------------------------
+# NO_COLOR environment variable tests  (newapp-10j.5)
+# ---------------------------------------------------------------------------
+
+
+def test_color_enabled_true_when_no_color_unset(monkeypatch):
+    """color_enabled() returns True when NO_COLOR is not in the environment."""
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    assert sysinfo.color_enabled() is True
+
+
+def test_color_enabled_false_when_no_color_set(monkeypatch):
+    """color_enabled() returns False when NO_COLOR is set to any value."""
+    monkeypatch.setenv("NO_COLOR", "1")
+    assert sysinfo.color_enabled() is False
+
+
+def test_color_enabled_false_when_no_color_empty(monkeypatch):
+    """color_enabled() returns False when NO_COLOR is set to empty string."""
+    monkeypatch.setenv("NO_COLOR", "")
+    assert sysinfo.color_enabled() is False
+
+
+def test_format_label_plain_when_no_color(monkeypatch):
+    """format_label() returns the bare label with no ANSI codes when NO_COLOR set."""
+    monkeypatch.setenv("NO_COLOR", "1")
+    result = sysinfo.format_label("OS Version:")
+    assert result == "OS Version:", (
+        f"Expected plain label when NO_COLOR set, got: {result!r}"
+    )
+    assert "\x1b[" not in result
+
+
+def test_format_header_plain_when_no_color(monkeypatch):
+    """format_header() returns the bare text with no ANSI codes when NO_COLOR set."""
+    monkeypatch.setenv("NO_COLOR", "1")
+    result = sysinfo.format_header("System Info")
+    assert result == "System Info", (
+        f"Expected plain text when NO_COLOR set, got: {result!r}"
+    )
+    assert "\x1b[" not in result
+
+
+def test_colorize_pct_plain_when_no_color(monkeypatch):
+    """colorize_pct() returns a plain 'X.X%' string with no ANSI when NO_COLOR set."""
+    monkeypatch.setenv("NO_COLOR", "1")
+    result = sysinfo.colorize_pct(75.0, 60.0, 85.0)
+    assert result == "75.0%", (
+        f"Expected plain percentage when NO_COLOR set, got: {result!r}"
+    )
+    assert "\x1b[" not in result
+
+
+def test_subprocess_no_ansi_when_no_color_set():
+    """Default output contains no ANSI escape codes when NO_COLOR is set."""
+    import os
+    env = {**os.environ, "NO_COLOR": "1"}
+    result = subprocess.run(
+        [sys.executable, "sysinfo.py"],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert result.returncode == 0
+    assert "\x1b[" not in result.stdout, (
+        f"Expected no ANSI codes in output when NO_COLOR=1, got: {result.stdout!r}"
+    )
+
+
+def test_subprocess_has_ansi_when_no_color_unset():
+    """ANSI codes present in direct calls when NO_COLOR is not set."""
+    import importlib
+    import os
+    # Subprocess strips ANSI on non-TTY pipes, so verify in-process instead.
+    orig = os.environ.get("NO_COLOR")
+    try:
+        os.environ.pop("NO_COLOR", None)
+        importlib.reload(sysinfo)
+        assert sysinfo.color_enabled() is True
+        assert "\x1b[" in sysinfo.format_label("Test:")
+        assert "\x1b[" in sysinfo.colorize_pct(50.0, 60.0, 85.0)
+    finally:
+        if orig is not None:
+            os.environ["NO_COLOR"] = orig
+        importlib.reload(sysinfo)  # restore module state
