@@ -209,6 +209,28 @@ def _cpu_json_output() -> None:
     ))
 
 
+def _memory_json_output() -> None:
+    """Print memory info as a versioned JSON object to stdout (no ANSI codes)."""
+    mem = get_mem_details()
+    _gb = 1024.0
+    print(json.dumps(
+        {
+            "version": "1.0",
+            "memory": {
+                "total_gb": round(mem["total_mb"] / _gb, 3),
+                "used_gb": round(mem["used_mb"] / _gb, 3),
+                "free_gb": round(mem["free_mb"] / _gb, 3),
+                "percent": round(
+                    mem["used_mb"] / mem["total_mb"] * 100
+                    if mem["total_mb"] else 0.0,
+                    1,
+                ),
+            },
+        },
+        indent=2,
+    ))
+
+
 def main() -> int:
     """Entry point for sysinfo CLI."""
     parser = argparse.ArgumentParser(
@@ -249,12 +271,33 @@ def main() -> int:
         help="Output CPU info as JSON ({version, cpu: {overall, cores}}).",
     )
 
+    # memory sub-command
+    mem_parser = subparsers.add_parser(
+        "memory",
+        help="Show memory information.",
+    )
+    mem_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="mem_json",
+        help=(
+            "Output memory info as JSON "
+            "({version, memory: {total_gb, used_gb, free_gb, percent}})."
+        ),
+    )
+
     args = parser.parse_args()
 
     # --- cpu sub-command ---
     if args.command == "cpu":
         if args.cpu_json:
             _cpu_json_output()
+            return 0
+
+    # --- memory sub-command ---
+    if args.command == "memory":
+        if args.mem_json:
+            _memory_json_output()
             return 0
         # No flags: fall through to default human-readable display below,
         # but first ensure --top is valid (default is 10, so normally fine).

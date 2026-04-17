@@ -1097,3 +1097,102 @@ def test_cpu_json_core_count_matches_psutil():
     assert len(data["cpu"]["cores"]) == expected, (
         f"Expected {expected} core entries, got {len(data['cpu']['cores'])}"
     )
+
+
+# ---------------------------------------------------------------------------
+# memory sub-command --json tests  (newapp-odd.2 / US-002)
+# ---------------------------------------------------------------------------
+
+
+def test_memory_json_exits_zero():
+    """memory --json exits with code 0."""
+    result = run_sysinfo("memory", "--json")
+    assert result.returncode == 0, (
+        f"Expected exit 0 with 'memory --json', got {result.returncode}"
+    )
+
+
+def test_memory_json_produces_valid_json():
+    """memory --json stdout is valid, parseable JSON."""
+    result = run_sysinfo("memory", "--json")
+    assert result.returncode == 0
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        pytest.fail(
+            f"'memory --json' output is not valid JSON: {exc}\n{result.stdout!r}"
+        )
+    assert isinstance(data, dict), (
+        f"Expected dict at top level, got {type(data)}"
+    )
+
+
+def test_memory_json_has_version_and_memory_keys():
+    """memory --json output contains top-level 'version' and 'memory' keys."""
+    result = run_sysinfo("memory", "--json")
+    data = json.loads(result.stdout)
+    assert "version" in data, (
+        f"Expected 'version' key in memory --json output, got: {list(data)}"
+    )
+    assert data["version"] == "1.0", (
+        f"Expected version '1.0', got: {data['version']!r}"
+    )
+    assert "memory" in data, (
+        f"Expected 'memory' key in memory --json output, got: {list(data)}"
+    )
+    assert isinstance(data["memory"], dict), (
+        f"Expected 'memory' value to be dict, got {type(data['memory'])}"
+    )
+
+
+def test_memory_json_memory_has_required_keys():
+    """memory --json 'memory' dict contains total_gb, used_gb, free_gb, percent."""
+    result = run_sysinfo("memory", "--json")
+    data = json.loads(result.stdout)
+    mem = data["memory"]
+    for key in ("total_gb", "used_gb", "free_gb", "percent"):
+        assert key in mem, (
+            f"Expected key '{key}' in memory --json output, got: {list(mem)}"
+        )
+
+
+def test_memory_json_no_ansi_codes():
+    """memory --json output contains no ANSI escape sequences."""
+    result = run_sysinfo("memory", "--json")
+    assert "\x1b[" not in result.stdout, (
+        f"ANSI escape codes found in 'memory --json' output: {result.stdout!r}"
+    )
+
+
+def test_memory_json_only_version_and_memory_keys():
+    """memory --json output does not leak cpu, disk, or other top-level keys."""
+    result = run_sysinfo("memory", "--json")
+    data = json.loads(result.stdout)
+    unexpected = set(data.keys()) - {"version", "memory"}
+    assert not unexpected, (
+        f"Unexpected top-level keys in 'memory --json' output: {unexpected}"
+    )
+
+
+def test_memory_json_values_are_numeric():
+    """memory --json memory values are numeric and non-negative."""
+    result = run_sysinfo("memory", "--json")
+    data = json.loads(result.stdout)
+    mem = data["memory"]
+    for key in ("total_gb", "used_gb", "free_gb"):
+        assert isinstance(mem[key], (int, float)) and mem[key] >= 0, (
+            f"Expected non-negative number for '{key}', got: {mem[key]!r}"
+        )
+    assert 0.0 <= mem["percent"] <= 100.0, (
+        f"percent should be 0-100, got: {mem['percent']!r}"
+    )
+
+
+def test_memory_json_total_gb_ge_used_gb():
+    """memory --json total_gb >= used_gb."""
+    result = run_sysinfo("memory", "--json")
+    data = json.loads(result.stdout)
+    mem = data["memory"]
+    assert mem["total_gb"] >= mem["used_gb"], (
+        f"total_gb {mem['total_gb']} < used_gb {mem['used_gb']}"
+    )
