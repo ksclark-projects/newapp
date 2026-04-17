@@ -249,6 +249,44 @@ def _cpu_json_output() -> None:
     ))
 
 
+def _memory_plain_output() -> None:
+    """Print memory-only information in human-readable form to stdout."""
+    mem = get_mem_details()
+    mem_pct = psutil.virtual_memory().percent
+    mem_detail = (
+        f"{_fmt_size(mem['used_mb'])} used / "
+        f"{_fmt_size(mem['free_mb'])} available / "
+        f"{_fmt_size(mem['total_mb'])} total"
+    )
+    print(
+        f"{format_label('Memory Usage:')} "
+        f"{colorize_pct(mem_pct, MEM_WARN, MEM_CRIT)}"
+        f"  ({mem_detail})"
+    )
+
+
+def _memory_json_output() -> None:
+    """Print memory info as a versioned JSON object to stdout (no ANSI codes)."""
+    vm = psutil.virtual_memory()
+    _gb = 1024.0 * 1024 * 1024
+    print(json.dumps(
+        {
+            "version": "1.0",
+            "memory": {
+                # total_gb / used_gb / available_gb are in GiB (1024^3 bytes)
+                "total_gb": round(vm.total / _gb, 3),
+                "used_gb": round(vm.used / _gb, 3),
+                # available_gb is vm.available (memory usable by processes),
+                # not vm.free (unallocated pages).
+                "available_gb": round(vm.available / _gb, 3),
+                # percent is psutil's time-weighted utilisation value
+                "percent": vm.percent,
+            },
+        },
+        indent=2,
+    ))
+
+
 def main() -> int:
     """Entry point for sysinfo CLI."""
     parser = argparse.ArgumentParser(
@@ -289,6 +327,21 @@ def main() -> int:
         help="Output CPU info as JSON ({version, cpu: {overall, cores}}).",
     )
 
+    # memory sub-command
+    mem_parser = subparsers.add_parser(
+        "memory",
+        help="Show memory information.",
+    )
+    mem_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="mem_json",
+        help=(
+            "Output memory info as JSON "
+            "({version, memory: {total_gb, used_gb, available_gb, percent}})."
+        ),
+    )
+
     args = parser.parse_args()
 
     # --- cpu sub-command ---
@@ -296,8 +349,14 @@ def main() -> int:
         if args.cpu_json:
             _cpu_json_output()
             return 0
-        # No flags: show CPU-only plain-text output.
-        _cpu_plain_output()
+
+    # --- memory sub-command ---
+    if args.command == "memory":
+        if args.mem_json:
+            _memory_json_output()
+            return 0
+        # No flags: show memory-only plain-text output.
+        _memory_plain_output()
         return 0
 
     if args.command is None:
