@@ -11,6 +11,16 @@ import psutil
 
 colorama.init(autoreset=True)
 
+
+def color_enabled() -> bool:
+    """Return True if ANSI colour output is allowed.
+
+    Respects the NO_COLOR convention (https://no-color.org/): when the
+    NO_COLOR environment variable is set to any value, colour is disabled.
+    """
+    return os.environ.get("NO_COLOR") is None
+
+
 # Threshold constants for CPU, memory, and disk usage (percentages)
 CPU_WARN = 60
 CPU_CRIT = 85
@@ -21,7 +31,12 @@ DISK_CRIT = 90
 
 
 def format_header(text: str) -> str:
-    """Return *text* wrapped in bold+cyan ANSI codes for section headers."""
+    """Return *text* wrapped in bold+cyan ANSI codes for section headers.
+
+    Returns plain *text* when colour is disabled (NO_COLOR set).
+    """
+    if not color_enabled():
+        return text
     return (
         colorama.Style.BRIGHT
         + colorama.Fore.CYAN
@@ -31,7 +46,12 @@ def format_header(text: str) -> str:
 
 
 def format_label(label: str) -> str:
-    """Return *label* wrapped in yellow ANSI codes for key labels."""
+    """Return *label* wrapped in yellow ANSI codes for key labels.
+
+    Returns plain *label* when colour is disabled (NO_COLOR set).
+    """
+    if not color_enabled():
+        return label
     return (
         colorama.Fore.YELLOW
         + label
@@ -48,6 +68,8 @@ def colorize_pct(value: float, warn: float, crit: float) -> str:
       - red    -- value >= crit
     """
     pct_str = f"{value:.1f}%"
+    if not color_enabled():
+        return pct_str
     if value >= crit:
         color = colorama.Fore.RED
     elif value >= warn:
@@ -192,10 +214,28 @@ def get_python_version() -> str:
     return f"{v.major}.{v.minor}.{v.micro}"
 
 
+def _cpu_plain_output() -> None:
+    """Print CPU-only information in human-readable form to stdout."""
+    cpu_pct = get_cpu_pct()
+    cores = get_cpu_cores()
+    print(
+        f"{format_label('CPU Usage:')} "
+        f"{colorize_pct(cpu_pct, CPU_WARN, CPU_CRIT)}"
+    )
+    for i, core_pct in enumerate(cores):
+        print(
+            f"  {format_label(f'Core {i}:')} "
+            f"{colorize_pct(core_pct, CPU_WARN, CPU_CRIT)}"
+        )
+
+
 def _cpu_json_output() -> None:
     """Print CPU info as a versioned JSON object to stdout (no ANSI codes)."""
     # Single psutil call so overall and per-core figures are consistent.
     cores = psutil.cpu_percent(interval=0.1, percpu=True)
+    # overall is the arithmetic mean of per-core percentages, not psutil's
+    # time-weighted cpu_percent() — computed this way to avoid a second
+    # 100 ms blocking interval call and keep overall/cores consistent.
     overall = sum(cores) / len(cores) if cores else 0.0
     print(json.dumps(
         {
@@ -330,8 +370,10 @@ def main() -> int:
 
     if args.json:
         # Collect per-core percentages in a single psutil call, then derive
-        # the overall figure as the mean — avoids two separate 100 ms sleeps
-        # that would otherwise produce an inconsistent overall/cores pair.
+        # the overall figure as the arithmetic mean of per-core values.
+        # This is NOT psutil's time-weighted cpu_percent() — it avoids two
+        # separate 100 ms blocking calls that would produce an inconsistent
+        # overall/cores pair.
         cores = psutil.cpu_percent(interval=0.1, percpu=True)
         overall = sum(cores) / len(cores) if cores else 0.0
         print(json.dumps(
