@@ -1146,11 +1146,11 @@ def test_memory_json_has_version_and_memory_keys():
 
 
 def test_memory_json_memory_has_required_keys():
-    """memory --json 'memory' dict contains total_gb, used_gb, free_gb, percent."""
+    """memory --json 'memory' dict contains total_gb, used_gb, available_gb, percent."""
     result = run_sysinfo("memory", "--json")
     data = json.loads(result.stdout)
     mem = data["memory"]
-    for key in ("total_gb", "used_gb", "free_gb", "percent"):
+    for key in ("total_gb", "used_gb", "available_gb", "percent"):
         assert key in mem, (
             f"Expected key '{key}' in memory --json output, got: {list(mem)}"
         )
@@ -1179,7 +1179,7 @@ def test_memory_json_values_are_numeric():
     result = run_sysinfo("memory", "--json")
     data = json.loads(result.stdout)
     mem = data["memory"]
-    for key in ("total_gb", "used_gb", "free_gb"):
+    for key in ("total_gb", "used_gb", "available_gb"):
         assert isinstance(mem[key], (int, float)) and mem[key] >= 0, (
             f"Expected non-negative number for '{key}', got: {mem[key]!r}"
         )
@@ -1196,3 +1196,61 @@ def test_memory_json_total_gb_ge_used_gb():
     assert mem["total_gb"] >= mem["used_gb"], (
         f"total_gb {mem['total_gb']} < used_gb {mem['used_gb']}"
     )
+
+
+def test_memory_json_percent_uses_psutil_value():
+    """memory --json percent matches psutil.virtual_memory().percent."""
+    result = run_sysinfo("memory", "--json")
+    data = json.loads(result.stdout)
+    # psutil percent should be a float in range, not recomputed from used/total
+    assert isinstance(data["memory"]["percent"], float), (
+        f"Expected float for percent, got: {type(data['memory']['percent'])}"
+    )
+    assert 0.0 <= data["memory"]["percent"] <= 100.0, (
+        f"percent out of range: {data['memory']['percent']}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# memory sub-command plain (no --json) tests  (PR #20 review)
+# ---------------------------------------------------------------------------
+
+
+def test_memory_plain_exits_zero():
+    """'sysinfo memory' (no flags) exits with code 0."""
+    result = run_sysinfo("memory")
+    assert result.returncode == 0, (
+        f"Expected exit 0 for 'sysinfo memory', got {result.returncode}\n"
+        f"stderr: {result.stderr}"
+    )
+
+
+def test_memory_plain_shows_memory_usage_line():
+    """'sysinfo memory' output includes a 'Memory Usage:' line."""
+    result = run_sysinfo("memory")
+    clean = ANSI_ESCAPE.sub("", result.stdout)
+    assert "Memory Usage:" in clean, (
+        f"Expected 'Memory Usage:' in 'sysinfo memory' output, got:\n{clean}"
+    )
+
+
+def test_memory_plain_does_not_show_cpu_or_disk():
+    """'sysinfo memory' output does not include CPU or disk sections."""
+    result = run_sysinfo("memory")
+    clean = ANSI_ESCAPE.sub("", result.stdout)
+    assert "CPU Usage:" not in clean, (
+        "'sysinfo memory' should not show CPU Usage section"
+    )
+    assert "Disk Usage:" not in clean, (
+        "'sysinfo memory' should not show Disk Usage section"
+    )
+
+
+def test_memory_plain_does_not_output_json():
+    """'sysinfo memory' (no --json) output is not JSON."""
+    result = run_sysinfo("memory")
+    try:
+        json.loads(result.stdout)
+        pytest.fail("'sysinfo memory' plain output should not be valid JSON")
+    except json.JSONDecodeError:
+        pass  # expected

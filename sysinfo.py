@@ -209,22 +209,38 @@ def _cpu_json_output() -> None:
     ))
 
 
+def _memory_plain_output() -> None:
+    """Print memory-only information in human-readable form to stdout."""
+    mem = get_mem_details()
+    mem_pct = psutil.virtual_memory().percent
+    mem_detail = (
+        f"{_fmt_size(mem['used_mb'])} used / "
+        f"{_fmt_size(mem['free_mb'])} available / "
+        f"{_fmt_size(mem['total_mb'])} total"
+    )
+    print(
+        f"{format_label('Memory Usage:')} "
+        f"{colorize_pct(mem_pct, MEM_WARN, MEM_CRIT)}"
+        f"  ({mem_detail})"
+    )
+
+
 def _memory_json_output() -> None:
     """Print memory info as a versioned JSON object to stdout (no ANSI codes)."""
-    mem = get_mem_details()
-    _gb = 1024.0
+    vm = psutil.virtual_memory()
+    _gb = 1024.0 * 1024 * 1024
     print(json.dumps(
         {
             "version": "1.0",
             "memory": {
-                "total_gb": round(mem["total_mb"] / _gb, 3),
-                "used_gb": round(mem["used_mb"] / _gb, 3),
-                "free_gb": round(mem["free_mb"] / _gb, 3),
-                "percent": round(
-                    mem["used_mb"] / mem["total_mb"] * 100
-                    if mem["total_mb"] else 0.0,
-                    1,
-                ),
+                # total_gb / used_gb / available_gb are in GiB (1024^3 bytes)
+                "total_gb": round(vm.total / _gb, 3),
+                "used_gb": round(vm.used / _gb, 3),
+                # available_gb is vm.available (memory usable by processes),
+                # not vm.free (unallocated pages).
+                "available_gb": round(vm.available / _gb, 3),
+                # percent is psutil's time-weighted utilisation value
+                "percent": vm.percent,
             },
         },
         indent=2,
@@ -299,9 +315,9 @@ def main() -> int:
         if args.mem_json:
             _memory_json_output()
             return 0
-        # No flags: fall through to default human-readable display below,
-        # but first ensure --top is valid (default is 10, so normally fine).
-        # Reuse the same human-readable output for consistency.
+        # No flags: show memory-only plain-text output.
+        _memory_plain_output()
+        return 0
 
     if args.command is None:
         # Only validate --top for the top-level (non-sub-command) path.
