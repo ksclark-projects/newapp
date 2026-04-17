@@ -355,8 +355,16 @@ def main() -> int:
             return 0
 
     if args.command is None:
-        # Only validate --top for the top-level (non-sub-command) path.
+        # Validate --top for the top-level (non-sub-command) path.
+        # When --json is also active, emit a JSON error instead of the default
+        # plain-text argparse message so callers receive a consistent format.
         if args.top < 0:
+            if args.json:
+                print(
+                    json.dumps({"error": "--top must be >= 0"}),
+                    file=sys.stderr,
+                )
+                return 1
             parser.error("--top must be >= 0")
 
     if args.python_version:
