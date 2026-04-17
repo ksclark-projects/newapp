@@ -825,10 +825,11 @@ def test_json_flag_exits_zero():
 
 
 def test_json_flag_contains_all_top_level_keys():
-    """--json output contains all required top-level keys."""
+    """--json output contains all required top-level keys, including version."""
     result = run_sysinfo("--json")
     data = json.loads(result.stdout)
-    for key in ("python_version", "cpu", "memory", "disk", "top_processes"):
+    for key in ("version", "python_version", "cpu", "memory", "disk",
+                "top_processes"):
         assert key in data, (
             f"Expected key '{key}' in --json output, got: {list(data)}"
         )

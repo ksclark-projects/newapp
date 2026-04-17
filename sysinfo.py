@@ -232,7 +232,14 @@ def _memory_json_output() -> None:
 
 
 def _disk_json_output(path: str = "/") -> None:
-    """Print disk info as a versioned JSON object to stdout (no ANSI codes)."""
+    """Print disk info as a versioned JSON object to stdout (no ANSI codes).
+
+    Note: This returns a single flat dict for the given *path* (default ``/``).
+    The top-level ``sysinfo --json`` snapshot uses ``get_disk_mounts()`` and
+    returns a list of all mount points under the ``"disk"`` key.  The
+    difference is intentional: the sub-command is scoped to one path probe,
+    while the dashboard shows all mounts.
+    """
     _GiB = 1024 ** 3
     usage = psutil.disk_usage(path)
     print(json.dumps(
@@ -380,6 +387,7 @@ def main() -> int:
             overall = sum(cores) / len(cores) if cores else 0.0
             print(json.dumps(
                 {
+                    "version": "1.0",
                     "python_version": get_python_version(),
                     "cpu": {
                         "overall": overall,
