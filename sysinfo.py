@@ -11,6 +11,16 @@ import psutil
 
 colorama.init(autoreset=True)
 
+
+def color_enabled() -> bool:
+    """Return True if ANSI colour output is allowed.
+
+    Respects the NO_COLOR convention (https://no-color.org/): when the
+    NO_COLOR environment variable is set to any value, colour is disabled.
+    """
+    return os.environ.get("NO_COLOR") is None
+
+
 # Threshold constants for CPU, memory, and disk usage (percentages)
 CPU_WARN = 60
 CPU_CRIT = 85
@@ -21,7 +31,12 @@ DISK_CRIT = 90
 
 
 def format_header(text: str) -> str:
-    """Return *text* wrapped in bold+cyan ANSI codes for section headers."""
+    """Return *text* wrapped in bold+cyan ANSI codes for section headers.
+
+    Returns plain *text* when colour is disabled (NO_COLOR set).
+    """
+    if not color_enabled():
+        return text
     return (
         colorama.Style.BRIGHT
         + colorama.Fore.CYAN
@@ -31,7 +46,12 @@ def format_header(text: str) -> str:
 
 
 def format_label(label: str) -> str:
-    """Return *label* wrapped in yellow ANSI codes for key labels."""
+    """Return *label* wrapped in yellow ANSI codes for key labels.
+
+    Returns plain *label* when colour is disabled (NO_COLOR set).
+    """
+    if not color_enabled():
+        return label
     return (
         colorama.Fore.YELLOW
         + label
@@ -48,6 +68,8 @@ def colorize_pct(value: float, warn: float, crit: float) -> str:
       - red    -- value >= crit
     """
     pct_str = f"{value:.1f}%"
+    if not color_enabled():
+        return pct_str
     if value >= crit:
         color = colorama.Fore.RED
     elif value >= warn:
@@ -192,10 +214,28 @@ def get_python_version() -> str:
     return f"{v.major}.{v.minor}.{v.micro}"
 
 
+def _cpu_plain_output() -> None:
+    """Print CPU-only information in human-readable form to stdout."""
+    cpu_pct = get_cpu_pct()
+    cores = get_cpu_cores()
+    print(
+        f"{format_label('CPU Usage:')} "
+        f"{colorize_pct(cpu_pct, CPU_WARN, CPU_CRIT)}"
+    )
+    for i, core_pct in enumerate(cores):
+        print(
+            f"  {format_label(f'Core {i}:')} "
+            f"{colorize_pct(core_pct, CPU_WARN, CPU_CRIT)}"
+        )
+
+
 def _cpu_json_output() -> None:
     """Print CPU info as a versioned JSON object to stdout (no ANSI codes)."""
     # Single psutil call so overall and per-core figures are consistent.
     cores = psutil.cpu_percent(interval=0.1, percpu=True)
+    # overall is the arithmetic mean of per-core percentages, not psutil's
+    # time-weighted cpu_percent() — computed this way to avoid a second
+    # 100 ms blocking interval call and keep overall/cores consistent.
     overall = sum(cores) / len(cores) if cores else 0.0
     print(json.dumps(
         {
@@ -209,22 +249,38 @@ def _cpu_json_output() -> None:
     ))
 
 
+def _memory_plain_output() -> None:
+    """Print memory-only information in human-readable form to stdout."""
+    mem = get_mem_details()
+    mem_pct = psutil.virtual_memory().percent
+    mem_detail = (
+        f"{_fmt_size(mem['used_mb'])} used / "
+        f"{_fmt_size(mem['free_mb'])} available / "
+        f"{_fmt_size(mem['total_mb'])} total"
+    )
+    print(
+        f"{format_label('Memory Usage:')} "
+        f"{colorize_pct(mem_pct, MEM_WARN, MEM_CRIT)}"
+        f"  ({mem_detail})"
+    )
+
+
 def _memory_json_output() -> None:
     """Print memory info as a versioned JSON object to stdout (no ANSI codes)."""
-    mem = get_mem_details()
-    _gb = 1024.0
+    vm = psutil.virtual_memory()
+    _gb = 1024.0 * 1024 * 1024
     print(json.dumps(
         {
             "version": "1.0",
             "memory": {
-                "total_gb": round(mem["total_mb"] / _gb, 3),
-                "used_gb": round(mem["used_mb"] / _gb, 3),
-                "free_gb": round(mem["free_mb"] / _gb, 3),
-                "percent": round(
-                    mem["used_mb"] / mem["total_mb"] * 100
-                    if mem["total_mb"] else 0.0,
-                    1,
-                ),
+                # total_gb / used_gb / available_gb are in GiB (1024^3 bytes)
+                "total_gb": round(vm.total / _gb, 3),
+                "used_gb": round(vm.used / _gb, 3),
+                # available_gb is vm.available (memory usable by processes),
+                # not vm.free (unallocated pages).
+                "available_gb": round(vm.available / _gb, 3),
+                # percent is psutil's time-weighted utilisation value
+                "percent": vm.percent,
             },
         },
         indent=2,
@@ -316,7 +372,7 @@ def main() -> int:
         dest="mem_json",
         help=(
             "Output memory info as JSON "
-            "({version, memory: {total_gb, used_gb, free_gb, percent}})."
+            "({version, memory: {total_gb, used_gb, available_gb, percent}})."
         ),
     )
 
@@ -354,9 +410,9 @@ def main() -> int:
         if args.mem_json:
             _memory_json_output()
             return 0
-        # No flags: fall through to default human-readable display below,
-        # but first ensure --top is valid (default is 10, so normally fine).
-        # Reuse the same human-readable output for consistency.
+        # No flags: show memory-only plain-text output.
+        _memory_plain_output()
+        return 0
 
     # --- disk sub-command ---
     if args.command == "disk":
@@ -378,8 +434,10 @@ def main() -> int:
 
     if args.json:
         # Collect per-core percentages in a single psutil call, then derive
-        # the overall figure as the mean — avoids two separate 100 ms sleeps
-        # that would otherwise produce an inconsistent overall/cores pair.
+        # the overall figure as the arithmetic mean of per-core values.
+        # This is NOT psutil's time-weighted cpu_percent() — it avoids two
+        # separate 100 ms blocking calls that would produce an inconsistent
+        # overall/cores pair.
         cores = psutil.cpu_percent(interval=0.1, percpu=True)
         overall = sum(cores) / len(cores) if cores else 0.0
         print(json.dumps(
