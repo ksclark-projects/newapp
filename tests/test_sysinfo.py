@@ -189,11 +189,16 @@ def test_format_header_ends_with_reset():
 
 
 def test_no_args_value_text_is_plain():
-    """Non-label value text (e.g. version string) must not be wrapped in ANSI."""
+    """Non-percentage value text (e.g. version string) must not be wrapped in ANSI."""
     result = run_sysinfo()
-    # Strip header ANSI: split each line on RESET_ALL (\x1b[0m) and check
-    # that the value portion (after the reset) has no further escape codes.
+    # Lines that display a plain string value (OS version, Python version) should
+    # have no ANSI codes after the label reset.  Lines that show a colorized
+    # percentage (CPU, Memory, Disk) are intentionally styled — skip those.
+    pct_labels = ("CPU Usage:", "Memory Usage:", "Disk Usage:")
     for line in result.stdout.splitlines():
+        clean_line = ANSI_ESCAPE.sub("", line)
+        if any(label in clean_line for label in pct_labels):
+            continue
         reset = "\x1b[0m"
         if reset in line:
             value_part = line.split(reset, 1)[1]
@@ -253,3 +258,94 @@ def test_format_label_all_labels_covered():
         assert ":" in line, (
             f"Expected a labelled line (containing ':'), got: {line!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# colorize_pct tests  (newapp-10j.4)
+# ---------------------------------------------------------------------------
+
+
+def test_colorize_pct_green_below_warn():
+    """colorize_pct() returns green for values below warn threshold."""
+    import colorama as _colorama
+    result = sysinfo.colorize_pct(50.0, 60.0, 85.0)
+    assert _colorama.Fore.GREEN in result, (
+        f"Expected Fore.GREEN for value below warn, got: {result!r}"
+    )
+
+
+def test_colorize_pct_yellow_at_warn():
+    """colorize_pct() returns yellow for values at the warn threshold."""
+    import colorama as _colorama
+    result = sysinfo.colorize_pct(60.0, 60.0, 85.0)
+    assert _colorama.Fore.YELLOW in result, (
+        f"Expected Fore.YELLOW at warn threshold, got: {result!r}"
+    )
+
+
+def test_colorize_pct_yellow_between_thresholds():
+    """colorize_pct() returns yellow for values between warn and crit."""
+    import colorama as _colorama
+    result = sysinfo.colorize_pct(75.0, 60.0, 85.0)
+    assert _colorama.Fore.YELLOW in result, (
+        f"Expected Fore.YELLOW between thresholds, got: {result!r}"
+    )
+
+
+def test_colorize_pct_red_at_crit():
+    """colorize_pct() returns red for values at the crit threshold."""
+    import colorama as _colorama
+    result = sysinfo.colorize_pct(85.0, 60.0, 85.0)
+    assert _colorama.Fore.RED in result, (
+        f"Expected Fore.RED at crit threshold, got: {result!r}"
+    )
+
+
+def test_colorize_pct_red_above_crit():
+    """colorize_pct() returns red for values above crit threshold."""
+    import colorama as _colorama
+    result = sysinfo.colorize_pct(95.0, 60.0, 85.0)
+    assert _colorama.Fore.RED in result, (
+        f"Expected Fore.RED above crit threshold, got: {result!r}"
+    )
+
+
+def test_colorize_pct_contains_percentage_string():
+    """colorize_pct() output includes the numeric percentage."""
+    result = sysinfo.colorize_pct(42.5, 60.0, 85.0)
+    assert "42.5%" in result, (
+        f"Expected '42.5%' in colorize_pct output, got: {result!r}"
+    )
+
+
+def test_colorize_pct_ends_with_reset():
+    """colorize_pct() output ends with RESET_ALL."""
+    import colorama as _colorama
+    result = sysinfo.colorize_pct(50.0, 60.0, 85.0)
+    assert result.endswith(_colorama.Style.RESET_ALL), (
+        f"colorize_pct output should end with RESET_ALL, got: {result!r}"
+    )
+
+
+def test_no_args_includes_cpu_line():
+    """Default output must include a 'CPU Usage:' line."""
+    result = run_sysinfo()
+    assert "CPU Usage:" in result.stdout, (
+        "Expected 'CPU Usage:' line in default output"
+    )
+
+
+def test_no_args_includes_memory_line():
+    """Default output must include a 'Memory Usage:' line."""
+    result = run_sysinfo()
+    assert "Memory Usage:" in result.stdout, (
+        "Expected 'Memory Usage:' line in default output"
+    )
+
+
+def test_no_args_includes_disk_line():
+    """Default output must include a 'Disk Usage:' line."""
+    result = run_sysinfo()
+    assert "Disk Usage:" in result.stdout, (
+        "Expected 'Disk Usage:' line in default output"
+    )
