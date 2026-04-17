@@ -2,6 +2,13 @@
 
 import subprocess
 import sys
+from unittest.mock import patch
+
+import pytest  # noqa: F401 — used for potential future parametrize
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 
 def run_sysinfo(*args):
@@ -12,6 +19,11 @@ def run_sysinfo(*args):
         text=True,
         cwd=None,  # inherits the working directory set by pytest
     )
+
+
+# ---------------------------------------------------------------------------
+# Existing tests
+# ---------------------------------------------------------------------------
 
 
 def test_python_version_exits_zero():
@@ -41,6 +53,95 @@ def test_python_version_matches_sys():
 
 
 def test_no_args_exits_zero():
-    """Running with no arguments should exit 0 (prints help)."""
+    """Running with no arguments should exit 0."""
     result = run_sysinfo()
     assert result.returncode == 0
+
+
+# ---------------------------------------------------------------------------
+# OS version tests
+# ---------------------------------------------------------------------------
+
+
+def test_no_args_includes_os_version_line():
+    """Running with no arguments should include an 'OS Version:' line."""
+    result = run_sysinfo()
+    assert result.returncode == 0
+    assert "OS Version:" in result.stdout
+
+
+def test_no_args_os_version_before_python():
+    """OS Version line must appear before Python line in default output."""
+    result = run_sysinfo()
+    lines = result.stdout.splitlines()
+    os_idx = next(
+        (i for i, l in enumerate(lines) if l.startswith("OS Version:")), None
+    )
+    py_idx = next(
+        (i for i, l in enumerate(lines) if l.startswith("Python:")), None
+    )
+    assert os_idx is not None, "OS Version line not found in output"
+    assert py_idx is not None, "Python line not found in output"
+    assert os_idx < py_idx, (
+        "OS Version line should appear before Python line"
+    )
+
+
+def test_get_os_version_happy_path():
+    """get_os_version returns a properly formatted string on macOS."""
+    # Import here so we can mock platform internals directly
+    import sysinfo
+
+    with patch("platform.system", return_value="Darwin"), \
+         patch("platform.release", return_value="23.4.0"), \
+         patch("platform.mac_ver", return_value=("14.4", ("", "", ""), "")):
+        result = sysinfo.get_os_version()
+
+    assert result == "macOS 14.4 (Darwin 23.4.0)", (
+        f"Unexpected OS version string: {result!r}"
+    )
+
+
+def test_get_os_version_format_pattern():
+    """get_os_version output matches expected pattern on macOS."""
+    import re
+    import sysinfo
+
+    with patch("platform.system", return_value="Darwin"), \
+         patch("platform.release", return_value="23.4.0"), \
+         patch("platform.mac_ver", return_value=("14.4", ("", "", ""), "")):
+        result = sysinfo.get_os_version()
+
+    pattern = r"^.+ .+ \(.+ .+\)$"
+    assert re.match(pattern, result), (
+        f"OS version string {result!r} does not match expected format "
+        "'<name> <version> (<kernel> <build>)'"
+    )
+
+
+def test_get_os_version_fallback_on_exception():
+    """get_os_version returns 'Unknown' when platform.mac_ver raises."""
+    import sysinfo
+
+    with patch("platform.mac_ver", side_effect=Exception("simulated error")):
+        result = sysinfo.get_os_version()
+
+    assert result == "Unknown", (
+        f"Expected 'Unknown' fallback, got: {result!r}"
+    )
+
+
+def test_get_os_version_fallback_on_empty_mac_ver():
+    """get_os_version falls back gracefully when mac_ver returns empty string."""
+    import sysinfo
+
+    # mac_ver returns empty version string — non-macOS path
+    with patch("platform.system", return_value="Linux"), \
+         patch("platform.release", return_value="5.15.0"), \
+         patch("platform.mac_ver", return_value=("", ("", "", ""), "")):
+        result = sysinfo.get_os_version()
+
+    # Should fall back to generic "system release" format
+    assert "Linux" in result or result == "Unknown", (
+        f"Unexpected fallback value: {result!r}"
+    )

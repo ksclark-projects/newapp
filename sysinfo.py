@@ -2,7 +2,30 @@
 """sysinfo.py — System information utility."""
 
 import argparse
+import platform
 import sys
+
+
+def get_os_version() -> str:
+    """Return a formatted OS version string.
+
+    Returns a string like 'macOS 14.4 (Darwin 23.4.0)'.
+    Falls back to 'Unknown' if retrieval fails or returns empty data.
+    """
+    try:
+        system = platform.system()
+        release = platform.release()
+        mac_ver_info = platform.mac_ver()
+        mac_version = mac_ver_info[0]
+
+        if system == "Darwin" and mac_version:
+            return f"macOS {mac_version} (Darwin {release})"
+        elif system and release:
+            return f"{system} {release}"
+        else:
+            return "Unknown"
+    except Exception:
+        return "Unknown"
 
 
 def get_python_version() -> str:
@@ -27,7 +50,8 @@ def main() -> int:
         print(get_python_version())
         return 0
 
-    parser.print_help()
+    print(f"OS Version: {get_os_version()}")
+    print(f"Python: {get_python_version()}")
     return 0
 
 
