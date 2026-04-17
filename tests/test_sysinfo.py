@@ -1,10 +1,13 @@
 """Tests for sysinfo.py."""
 
+import re
 import subprocess
 import sys
 from unittest.mock import patch
 
 import pytest  # noqa: F401 — used for potential future parametrize
+
+import sysinfo
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -89,9 +92,6 @@ def test_no_args_os_version_before_python():
 
 def test_get_os_version_happy_path():
     """get_os_version returns a properly formatted string on macOS."""
-    # Import here so we can mock platform internals directly
-    import sysinfo
-
     with patch("platform.system", return_value="Darwin"), \
          patch("platform.release", return_value="23.4.0"), \
          patch("platform.mac_ver", return_value=("14.4", ("", "", ""), "")):
@@ -104,9 +104,6 @@ def test_get_os_version_happy_path():
 
 def test_get_os_version_format_pattern():
     """get_os_version output matches expected pattern on macOS."""
-    import re
-    import sysinfo
-
     with patch("platform.system", return_value="Darwin"), \
          patch("platform.release", return_value="23.4.0"), \
          patch("platform.mac_ver", return_value=("14.4", ("", "", ""), "")):
@@ -121,8 +118,6 @@ def test_get_os_version_format_pattern():
 
 def test_get_os_version_fallback_on_exception():
     """get_os_version returns 'Unknown' when platform.mac_ver raises."""
-    import sysinfo
-
     with patch("platform.mac_ver", side_effect=Exception("simulated error")):
         result = sysinfo.get_os_version()
 
@@ -133,8 +128,6 @@ def test_get_os_version_fallback_on_exception():
 
 def test_get_os_version_fallback_on_empty_mac_ver():
     """get_os_version falls back gracefully when mac_ver returns empty string."""
-    import sysinfo
-
     # mac_ver returns empty version string — non-macOS path
     with patch("platform.system", return_value="Linux"), \
          patch("platform.release", return_value="5.15.0"), \
@@ -144,4 +137,16 @@ def test_get_os_version_fallback_on_empty_mac_ver():
     # Should fall back to generic "system release" format
     assert "Linux" in result or result == "Unknown", (
         f"Unexpected fallback value: {result!r}"
+    )
+
+
+def test_get_os_version_fallback_on_empty_system():
+    """get_os_version returns 'Unknown' when platform.system() returns empty."""
+    with patch("platform.system", return_value=""), \
+         patch("platform.release", return_value=""), \
+         patch("platform.mac_ver", return_value=("", ("", "", ""), "")):
+        result = sysinfo.get_os_version()
+
+    assert result == "Unknown", (
+        f"Expected 'Unknown' when system is empty, got: {result!r}"
     )
