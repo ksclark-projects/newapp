@@ -192,10 +192,28 @@ def get_python_version() -> str:
     return f"{v.major}.{v.minor}.{v.micro}"
 
 
+def _cpu_plain_output() -> None:
+    """Print CPU-only information in human-readable form to stdout."""
+    cpu_pct = get_cpu_pct()
+    cores = get_cpu_cores()
+    print(
+        f"{format_label('CPU Usage:')} "
+        f"{colorize_pct(cpu_pct, CPU_WARN, CPU_CRIT)}"
+    )
+    for i, core_pct in enumerate(cores):
+        print(
+            f"  {format_label(f'Core {i}:')} "
+            f"{colorize_pct(core_pct, CPU_WARN, CPU_CRIT)}"
+        )
+
+
 def _cpu_json_output() -> None:
     """Print CPU info as a versioned JSON object to stdout (no ANSI codes)."""
     # Single psutil call so overall and per-core figures are consistent.
     cores = psutil.cpu_percent(interval=0.1, percpu=True)
+    # overall is the arithmetic mean of per-core percentages, not psutil's
+    # time-weighted cpu_percent() — computed this way to avoid a second
+    # 100 ms blocking interval call and keep overall/cores consistent.
     overall = sum(cores) / len(cores) if cores else 0.0
     print(json.dumps(
         {
@@ -256,9 +274,9 @@ def main() -> int:
         if args.cpu_json:
             _cpu_json_output()
             return 0
-        # No flags: fall through to default human-readable display below,
-        # but first ensure --top is valid (default is 10, so normally fine).
-        # Reuse the same human-readable output for consistency.
+        # No flags: show CPU-only plain-text output.
+        _cpu_plain_output()
+        return 0
 
     if args.command is None:
         # Only validate --top for the top-level (non-sub-command) path.
@@ -271,8 +289,10 @@ def main() -> int:
 
     if args.json:
         # Collect per-core percentages in a single psutil call, then derive
-        # the overall figure as the mean — avoids two separate 100 ms sleeps
-        # that would otherwise produce an inconsistent overall/cores pair.
+        # the overall figure as the arithmetic mean of per-core values.
+        # This is NOT psutil's time-weighted cpu_percent() — it avoids two
+        # separate 100 ms blocking calls that would produce an inconsistent
+        # overall/cores pair.
         cores = psutil.cpu_percent(interval=0.1, percpu=True)
         overall = sum(cores) / len(cores) if cores else 0.0
         print(json.dumps(

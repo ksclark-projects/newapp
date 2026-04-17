@@ -1097,3 +1097,58 @@ def test_cpu_json_core_count_matches_psutil():
     assert len(data["cpu"]["cores"]) == expected, (
         f"Expected {expected} core entries, got {len(data['cpu']['cores'])}"
     )
+
+
+# ---------------------------------------------------------------------------
+# cpu sub-command plain (no --json) tests  (PR #19 review)
+# ---------------------------------------------------------------------------
+
+
+def test_cpu_plain_exits_zero():
+    """'sysinfo cpu' (no flags) exits with code 0."""
+    result = run_sysinfo("cpu")
+    assert result.returncode == 0, (
+        f"Expected exit 0 for 'sysinfo cpu', got {result.returncode}\n"
+        f"stderr: {result.stderr}"
+    )
+
+
+def test_cpu_plain_shows_cpu_usage_line():
+    """'sysinfo cpu' output includes a 'CPU Usage:' line."""
+    result = run_sysinfo("cpu")
+    clean = ANSI_ESCAPE.sub("", result.stdout)
+    assert "CPU Usage:" in clean, (
+        f"Expected 'CPU Usage:' in 'sysinfo cpu' output, got:\n{clean}"
+    )
+
+
+def test_cpu_plain_shows_core_lines():
+    """'sysinfo cpu' output includes at least one 'Core N:' line."""
+    result = run_sysinfo("cpu")
+    clean = ANSI_ESCAPE.sub("", result.stdout)
+    core_lines = [ln for ln in clean.splitlines() if "Core " in ln and ":" in ln]
+    assert len(core_lines) > 0, (
+        "Expected at least one 'Core N:' line in 'sysinfo cpu' output"
+    )
+
+
+def test_cpu_plain_does_not_show_memory_or_disk():
+    """'sysinfo cpu' output does not include memory or disk sections."""
+    result = run_sysinfo("cpu")
+    clean = ANSI_ESCAPE.sub("", result.stdout)
+    assert "Memory Usage:" not in clean, (
+        "'sysinfo cpu' should not show Memory Usage section"
+    )
+    assert "Disk Usage:" not in clean, (
+        "'sysinfo cpu' should not show Disk Usage section"
+    )
+
+
+def test_cpu_plain_does_not_output_json():
+    """'sysinfo cpu' (no --json) output is not JSON."""
+    result = run_sysinfo("cpu")
+    try:
+        json.loads(result.stdout)
+        pytest.fail("'sysinfo cpu' plain output should not be valid JSON")
+    except json.JSONDecodeError:
+        pass  # expected
