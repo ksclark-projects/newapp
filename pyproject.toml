@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "newapp-sysinfo"
+version = "0.1.0"
+description = "A colorized system-information CLI utility."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "colorama",
+    "psutil",
+]
+
+[project.scripts]
+sysinfo = "sysinfo:main"
+
+[tool.setuptools]
+py-modules = ["sysinfo"]
