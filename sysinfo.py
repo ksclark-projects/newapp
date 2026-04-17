@@ -5,6 +5,10 @@ import argparse
 import platform
 import sys
 
+import colorama
+
+colorama.init(autoreset=True)
+
 
 def get_os_version() -> str:
     """Return a formatted OS version string.
