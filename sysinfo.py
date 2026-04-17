@@ -2,6 +2,7 @@
 """sysinfo.py — System information utility."""
 
 import argparse
+import os
 import platform
 import sys
 
@@ -9,6 +10,16 @@ import colorama
 import psutil
 
 colorama.init(autoreset=True)
+
+
+def color_enabled() -> bool:
+    """Return True if ANSI colour output is allowed.
+
+    Respects the NO_COLOR convention (https://no-color.org/): when the
+    NO_COLOR environment variable is set to any value, colour is disabled.
+    """
+    return os.environ.get("NO_COLOR") is None
+
 
 # Threshold constants for CPU, memory, and disk usage (percentages)
 CPU_WARN = 60
@@ -20,7 +31,12 @@ DISK_CRIT = 90
 
 
 def format_header(text: str) -> str:
-    """Return *text* wrapped in bold+cyan ANSI codes for section headers."""
+    """Return *text* wrapped in bold+cyan ANSI codes for section headers.
+
+    Returns plain *text* when colour is disabled (NO_COLOR set).
+    """
+    if not color_enabled():
+        return text
     return (
         colorama.Style.BRIGHT
         + colorama.Fore.CYAN
@@ -30,7 +46,12 @@ def format_header(text: str) -> str:
 
 
 def format_label(label: str) -> str:
-    """Return *label* wrapped in yellow ANSI codes for key labels."""
+    """Return *label* wrapped in yellow ANSI codes for key labels.
+
+    Returns plain *label* when colour is disabled (NO_COLOR set).
+    """
+    if not color_enabled():
+        return label
     return (
         colorama.Fore.YELLOW
         + label
@@ -43,10 +64,14 @@ def colorize_pct(value: float, warn: float, crit: float) -> str:
 
     Colors:
       - green  — value < warn
-      - yellow — warn <= value <= crit
-      - red    — value > crit
+      - yellow — warn <= value < crit
+      - red    — value >= crit
+
+    Returns a plain percentage string when colour is disabled (NO_COLOR set).
     """
     pct_str = f"{value:.1f}%"
+    if not color_enabled():
+        return pct_str
     if value >= crit:
         color = colorama.Fore.RED
     elif value >= warn:
