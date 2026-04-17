@@ -324,13 +324,21 @@ def main() -> int:
     # --- cpu sub-command ---
     if args.command == "cpu":
         if args.cpu_json:
-            _cpu_json_output()
+            try:
+                _cpu_json_output()
+            except Exception as exc:
+                print(json.dumps({"error": str(exc)}), file=sys.stderr)
+                return 1
             return 0
 
     # --- memory sub-command ---
     if args.command == "memory":
         if args.mem_json:
-            _memory_json_output()
+            try:
+                _memory_json_output()
+            except Exception as exc:
+                print(json.dumps({"error": str(exc)}), file=sys.stderr)
+                return 1
             return 0
         # No flags: fall through to default human-readable display below,
         # but first ensure --top is valid (default is 10, so normally fine).
@@ -339,7 +347,11 @@ def main() -> int:
     # --- disk sub-command ---
     if args.command == "disk":
         if args.disk_json:
-            _disk_json_output()
+            try:
+                _disk_json_output()
+            except Exception as exc:
+                print(json.dumps({"error": str(exc)}), file=sys.stderr)
+                return 1
             return 0
 
     if args.command is None:
@@ -352,24 +364,28 @@ def main() -> int:
         return 0
 
     if args.json:
-        # Collect per-core percentages in a single psutil call, then derive
-        # the overall figure as the mean — avoids two separate 100 ms sleeps
-        # that would otherwise produce an inconsistent overall/cores pair.
-        cores = psutil.cpu_percent(interval=0.1, percpu=True)
-        overall = sum(cores) / len(cores) if cores else 0.0
-        print(json.dumps(
-            {
-                "python_version": get_python_version(),
-                "cpu": {
-                    "overall": overall,
-                    "cores": cores,
+        try:
+            # Collect per-core percentages in a single psutil call, then derive
+            # the overall figure as the mean — avoids two separate 100 ms sleeps
+            # that would otherwise produce an inconsistent overall/cores pair.
+            cores = psutil.cpu_percent(interval=0.1, percpu=True)
+            overall = sum(cores) / len(cores) if cores else 0.0
+            print(json.dumps(
+                {
+                    "python_version": get_python_version(),
+                    "cpu": {
+                        "overall": overall,
+                        "cores": cores,
+                    },
+                    "memory": get_mem_details(),
+                    "disk": get_disk_mounts(),
+                    "top_processes": get_top_processes(args.top),
                 },
-                "memory": get_mem_details(),
-                "disk": get_disk_mounts(),
-                "top_processes": get_top_processes(args.top),
-            },
-            indent=2,
-        ))
+                indent=2,
+            ))
+        except Exception as exc:
+            print(json.dumps({"error": str(exc)}), file=sys.stderr)
+            return 1
         return 0
 
     mem = get_mem_details()

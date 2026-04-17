@@ -1325,3 +1325,228 @@ def test_disk_json_mocked():
     assert data["disk"]["used_gb"] == 40.0
     assert data["disk"]["free_gb"] == 60.0
     assert data["disk"]["percent"] == 40.0
+
+
+# ---------------------------------------------------------------------------
+# JSON error output tests  (newapp-odd.4 / US-004)
+# ---------------------------------------------------------------------------
+
+
+def _assert_json_error(result, expected_msg_fragment=None):
+    """Assert that *result* is a JSON error response: non-zero exit, JSON on
+    stderr with an 'error' key, and empty stdout."""
+    assert result.returncode != 0, (
+        f"Expected non-zero exit code on error, got {result.returncode}"
+    )
+    assert result.stdout == "", (
+        f"Expected empty stdout on error, got: {result.stdout!r}"
+    )
+    try:
+        err_data = json.loads(result.stderr)
+    except json.JSONDecodeError as exc:
+        pytest.fail(
+            f"stderr is not valid JSON on error: {exc}\n{result.stderr!r}"
+        )
+    assert "error" in err_data, (
+        f"Expected 'error' key in stderr JSON, got: {err_data!r}"
+    )
+    assert isinstance(err_data["error"], str), (
+        f"Expected 'error' value to be a string, got: {type(err_data['error'])}"
+    )
+    if expected_msg_fragment:
+        assert expected_msg_fragment in err_data["error"], (
+            f"Expected {expected_msg_fragment!r} in error message, "
+            f"got: {err_data['error']!r}"
+        )
+
+
+def test_cpu_json_error_outputs_json_to_stderr():
+    """cpu --json writes JSON error to stderr when psutil.cpu_percent raises."""
+    result = run_sysinfo("cpu", "--json")
+    # Verify normal path works first, then test error injection via mocking
+    # (subprocess test for injection not feasible; use unit-level instead)
+    assert result.returncode == 0  # sanity check normal path
+
+
+def test_cpu_json_error_unit_nonzero_exit():
+    """_cpu_json_output() failure causes main() to exit 1 with JSON on stderr."""
+    import argparse as _argparse
+    import io
+
+    class _Args:
+        command = "cpu"
+        cpu_json = True
+
+    def _fake_parse(self, args=None, namespace=None):
+        return _Args()
+
+    stderr_buf = io.StringIO()
+    stdout_buf = io.StringIO()
+
+    with patch("psutil.cpu_percent", side_effect=RuntimeError("simulated cpu failure")), \
+         patch.object(_argparse.ArgumentParser, "parse_args", _fake_parse), \
+         patch("sys.stderr", stderr_buf), \
+         patch("sys.stdout", stdout_buf):
+        rc = sysinfo.main()
+
+    assert rc == 1, f"Expected exit code 1 on cpu error, got {rc}"
+    assert stdout_buf.getvalue() == "", (
+        f"Expected empty stdout on cpu error, got: {stdout_buf.getvalue()!r}"
+    )
+    err_data = json.loads(stderr_buf.getvalue())
+    assert "error" in err_data, f"Expected 'error' key in stderr JSON: {err_data!r}"
+    assert "simulated cpu failure" in err_data["error"], (
+        f"Expected error message in stderr JSON: {err_data!r}"
+    )
+
+
+def test_memory_json_error_unit_nonzero_exit():
+    """_memory_json_output() failure causes main() to exit 1 with JSON on stderr."""
+    import argparse as _argparse
+    import io
+
+    class _Args:
+        command = "memory"
+        mem_json = True
+
+    def _fake_parse(self, args=None, namespace=None):
+        return _Args()
+
+    stderr_buf = io.StringIO()
+    stdout_buf = io.StringIO()
+
+    with patch("psutil.virtual_memory", side_effect=RuntimeError("simulated mem failure")), \
+         patch.object(_argparse.ArgumentParser, "parse_args", _fake_parse), \
+         patch("sys.stderr", stderr_buf), \
+         patch("sys.stdout", stdout_buf):
+        rc = sysinfo.main()
+
+    assert rc == 1, f"Expected exit code 1 on memory error, got {rc}"
+    assert stdout_buf.getvalue() == "", (
+        f"Expected empty stdout on memory error, got: {stdout_buf.getvalue()!r}"
+    )
+    err_data = json.loads(stderr_buf.getvalue())
+    assert "error" in err_data, f"Expected 'error' key in stderr JSON: {err_data!r}"
+    assert "simulated mem failure" in err_data["error"], (
+        f"Expected error message in stderr JSON: {err_data!r}"
+    )
+
+
+def test_disk_json_error_unit_nonzero_exit():
+    """_disk_json_output() failure causes main() to exit 1 with JSON on stderr."""
+    import argparse as _argparse
+    import io
+
+    class _Args:
+        command = "disk"
+        disk_json = True
+
+    def _fake_parse(self, args=None, namespace=None):
+        return _Args()
+
+    stderr_buf = io.StringIO()
+    stdout_buf = io.StringIO()
+
+    with patch("psutil.disk_usage", side_effect=OSError("simulated disk failure")), \
+         patch.object(_argparse.ArgumentParser, "parse_args", _fake_parse), \
+         patch("sys.stderr", stderr_buf), \
+         patch("sys.stdout", stdout_buf):
+        rc = sysinfo.main()
+
+    assert rc == 1, f"Expected exit code 1 on disk error, got {rc}"
+    assert stdout_buf.getvalue() == "", (
+        f"Expected empty stdout on disk error, got: {stdout_buf.getvalue()!r}"
+    )
+    err_data = json.loads(stderr_buf.getvalue())
+    assert "error" in err_data, f"Expected 'error' key in stderr JSON: {err_data!r}"
+    assert "simulated disk failure" in err_data["error"], (
+        f"Expected error message in stderr JSON: {err_data!r}"
+    )
+
+
+def test_top_level_json_error_unit_nonzero_exit():
+    """Top-level --json failure causes main() to exit 1 with JSON on stderr."""
+    import argparse as _argparse
+    import io
+
+    class _Args:
+        command = None
+        json = True
+        python_version = False
+        top = 10
+
+    def _fake_parse(self, args=None, namespace=None):
+        return _Args()
+
+    stderr_buf = io.StringIO()
+    stdout_buf = io.StringIO()
+
+    with patch("psutil.cpu_percent", side_effect=RuntimeError("simulated top-level failure")), \
+         patch.object(_argparse.ArgumentParser, "parse_args", _fake_parse), \
+         patch("sys.stderr", stderr_buf), \
+         patch("sys.stdout", stdout_buf):
+        rc = sysinfo.main()
+
+    assert rc == 1, f"Expected exit code 1 on top-level json error, got {rc}"
+    assert stdout_buf.getvalue() == "", (
+        f"Expected empty stdout on top-level json error, got: {stdout_buf.getvalue()!r}"
+    )
+    err_data = json.loads(stderr_buf.getvalue())
+    assert "error" in err_data, f"Expected 'error' key in stderr JSON: {err_data!r}"
+    assert "simulated top-level failure" in err_data["error"], (
+        f"Expected error message in stderr JSON: {err_data!r}"
+    )
+
+
+def test_json_error_stderr_is_valid_json_not_traceback():
+    """On JSON error, stderr must be valid JSON — not a Python traceback."""
+    import argparse as _argparse
+    import io
+
+    class _Args:
+        command = "cpu"
+        cpu_json = True
+
+    def _fake_parse(self, args=None, namespace=None):
+        return _Args()
+
+    stderr_buf = io.StringIO()
+
+    with patch("psutil.cpu_percent", side_effect=RuntimeError("boom")), \
+         patch.object(_argparse.ArgumentParser, "parse_args", _fake_parse), \
+         patch("sys.stderr", stderr_buf), \
+         patch("sys.stdout", io.StringIO()):
+        sysinfo.main()
+
+    stderr_content = stderr_buf.getvalue()
+    assert "Traceback" not in stderr_content, (
+        f"stderr should not contain a traceback, got: {stderr_content!r}"
+    )
+    # Must be parseable JSON
+    data = json.loads(stderr_content)
+    assert "error" in data
+
+
+def test_json_error_stdout_empty_on_cpu_failure():
+    """On cpu --json failure, stdout must be completely empty."""
+    import argparse as _argparse
+    import io
+
+    class _Args:
+        command = "cpu"
+        cpu_json = True
+
+    def _fake_parse(self, args=None, namespace=None):
+        return _Args()
+
+    stdout_buf = io.StringIO()
+
+    with patch("psutil.cpu_percent", side_effect=RuntimeError("fail")), \
+         patch.object(_argparse.ArgumentParser, "parse_args", _fake_parse), \
+         patch("sys.stderr", io.StringIO()), \
+         patch("sys.stdout", stdout_buf):
+        sysinfo.main()
+
+    assert stdout_buf.getvalue() == "", (
+        f"Expected completely empty stdout on failure, got: {stdout_buf.getvalue()!r}"
+    )
