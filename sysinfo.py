@@ -244,7 +244,16 @@ def main() -> int:
 
     if args.json:
         print(json.dumps(
-            {"memory": get_mem_details(), "disk": get_disk_mounts()},
+            {
+                "python_version": get_python_version(),
+                "cpu": {
+                    "overall": get_cpu_pct(),
+                    "cores": get_cpu_cores(),
+                },
+                "memory": get_mem_details(),
+                "disk": get_disk_mounts(),
+                "top_processes": get_top_processes(args.top),
+            },
             indent=2,
         ))
         return 0

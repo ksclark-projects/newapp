@@ -813,6 +813,78 @@ def test_json_flag_includes_memory_key():
         )
 
 
+# ---------------------------------------------------------------------------
+# Full --json output tests  (newapp-850 / US-006)
+# ---------------------------------------------------------------------------
+
+
+def test_json_flag_exits_zero():
+    """--json flag exits with code 0."""
+    result = run_sysinfo("--json")
+    assert result.returncode == 0, (
+        f"Expected exit 0 with --json, got {result.returncode}"
+    )
+
+
+def test_json_flag_contains_all_top_level_keys():
+    """--json output contains all required top-level keys."""
+    result = run_sysinfo("--json")
+    data = json.loads(result.stdout)
+    for key in ("python_version", "cpu", "memory", "disk", "top_processes"):
+        assert key in data, (
+            f"Expected key '{key}' in --json output, got: {list(data)}"
+        )
+
+
+def test_json_flag_cpu_has_overall_and_cores():
+    """--json cpu value has 'overall' (float) and 'cores' (list)."""
+    result = run_sysinfo("--json")
+    data = json.loads(result.stdout)
+    cpu = data["cpu"]
+    assert "overall" in cpu, f"Expected 'overall' in cpu: {cpu!r}"
+    assert "cores" in cpu, f"Expected 'cores' in cpu: {cpu!r}"
+    assert isinstance(cpu["overall"], float), (
+        f"Expected cpu.overall to be float, got {type(cpu['overall'])}"
+    )
+    assert isinstance(cpu["cores"], list), (
+        f"Expected cpu.cores to be list, got {type(cpu['cores'])}"
+    )
+    assert len(cpu["cores"]) > 0, "Expected at least one core in cpu.cores"
+
+
+def test_json_flag_python_version_format():
+    """--json python_version matches MAJOR.MINOR.PATCH format."""
+    result = run_sysinfo("--json")
+    data = json.loads(result.stdout)
+    parts = data["python_version"].split(".")
+    assert len(parts) == 3, (
+        f"Expected 3-part version, got: {data['python_version']!r}"
+    )
+    assert all(p.isdigit() for p in parts), (
+        f"All version parts should be numeric: {data['python_version']!r}"
+    )
+
+
+def test_json_flag_top_processes_is_list():
+    """--json top_processes value is a list."""
+    result = run_sysinfo("--json")
+    data = json.loads(result.stdout)
+    assert isinstance(data["top_processes"], list), (
+        f"Expected top_processes to be list, got {type(data['top_processes'])}"
+    )
+
+
+def test_json_flag_top_processes_entry_keys():
+    """--json top_processes entries have pid, name, cpu_pct, mem_pct."""
+    result = run_sysinfo("--json")
+    data = json.loads(result.stdout)
+    for entry in data["top_processes"]:
+        for key in ("pid", "name", "cpu_pct", "mem_pct"):
+            assert key in entry, (
+                f"Expected key '{key}' in top_processes entry: {entry!r}"
+            )
+
+
 def test_fmt_size_under_1024_returns_mb():
     """_fmt_size() returns MB string for values under 1024."""
     assert sysinfo._fmt_size(512.0) == "512 MB"
