@@ -728,3 +728,98 @@ def test_no_args_disk_mount_lines_have_percentage():
         assert re.search(r"\d+\.\d+%", line), (
             f"Mount line missing percentage: {line!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Memory details tests  (newapp-528)
+# ---------------------------------------------------------------------------
+
+
+def test_get_mem_details_returns_dict():
+    """get_mem_details() returns a dict with the required keys."""
+    result = sysinfo.get_mem_details()
+    assert isinstance(result, dict), (
+        f"Expected dict from get_mem_details(), got: {type(result)}"
+    )
+    for key in ("used_mb", "free_mb", "cached_mb", "total_mb"):
+        assert key in result, f"Expected key '{key}' in mem details: {result}"
+
+
+def test_get_mem_details_values_are_numeric():
+    """get_mem_details() values are numeric (int or float)."""
+    result = sysinfo.get_mem_details()
+    for key, val in result.items():
+        assert isinstance(val, (int, float)), (
+            f"Expected numeric for '{key}', got {type(val)}: {val!r}"
+        )
+
+
+def test_get_mem_details_total_positive():
+    """get_mem_details() total_mb is a positive number."""
+    result = sysinfo.get_mem_details()
+    assert result["total_mb"] > 0, (
+        f"Expected total_mb > 0, got: {result['total_mb']}"
+    )
+
+
+def test_get_mem_details_used_le_total():
+    """get_mem_details() used_mb does not exceed total_mb."""
+    result = sysinfo.get_mem_details()
+    assert result["used_mb"] <= result["total_mb"], (
+        f"used_mb {result['used_mb']} exceeds total_mb {result['total_mb']}"
+    )
+
+
+def test_get_mem_details_mocked():
+    """get_mem_details() maps psutil fields correctly when mocked."""
+    mock_vm = MagicMock()
+    mock_vm.used = 8 * 1024 * 1024 * 1024       # 8 GiB
+    mock_vm.available = 4 * 1024 * 1024 * 1024  # 4 GiB
+    mock_vm.total = 16 * 1024 * 1024 * 1024     # 16 GiB
+    del mock_vm.cached  # cached not available on this platform
+    with patch("psutil.virtual_memory", return_value=mock_vm):
+        result = sysinfo.get_mem_details()
+    assert result["used_mb"] == round(8 * 1024, 1)
+    assert result["free_mb"] == round(4 * 1024, 1)
+    assert result["total_mb"] == round(16 * 1024, 1)
+    assert result["cached_mb"] == 0.0
+
+
+def test_no_args_memory_line_includes_used_free_total():
+    """Default output Memory Usage line includes used/free/total strings."""
+    result = run_sysinfo()
+    clean = ANSI_ESCAPE.sub("", result.stdout)
+    mem_line = next(
+        (ln for ln in clean.splitlines() if ln.startswith("Memory Usage:")),
+        None,
+    )
+    assert mem_line is not None, "No 'Memory Usage:' line in output"
+    assert "used" in mem_line, f"Expected 'used' in memory line: {mem_line!r}"
+    assert "free" in mem_line, f"Expected 'free' in memory line: {mem_line!r}"
+    assert "total" in mem_line, f"Expected 'total' in memory line: {mem_line!r}"
+
+
+def test_json_flag_includes_memory_key():
+    """--json output includes a 'memory' key with the required fields."""
+    result = run_sysinfo("--json")
+    assert result.returncode == 0
+    data = json.loads(result.stdout)
+    assert "memory" in data, (
+        f"Expected 'memory' key in --json output, got: {list(data)}"
+    )
+    for key in ("used_mb", "free_mb", "cached_mb", "total_mb"):
+        assert key in data["memory"], (
+            f"Expected '{key}' in memory JSON: {list(data['memory'])}"
+        )
+
+
+def test_fmt_size_under_1024_returns_mb():
+    """_fmt_size() returns MB string for values under 1024."""
+    assert sysinfo._fmt_size(512.0) == "512 MB"
+    assert sysinfo._fmt_size(0.0) == "0 MB"
+
+
+def test_fmt_size_1024_or_over_returns_gb():
+    """_fmt_size() returns GB string for values >= 1024."""
+    assert sysinfo._fmt_size(1024.0) == "1.0 GB"
+    assert sysinfo._fmt_size(8192.0) == "8.0 GB"
