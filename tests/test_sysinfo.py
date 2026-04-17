@@ -436,3 +436,49 @@ def test_subprocess_has_ansi_when_no_color_unset():
         if orig is not None:
             os.environ["NO_COLOR"] = orig
         importlib.reload(sysinfo)  # restore module state
+
+
+# ---------------------------------------------------------------------------
+# US-006: Additional color output tests  (newapp-10j.6)
+# ---------------------------------------------------------------------------
+
+
+def test_colorize_pct_high_cpu_red_when_color_enabled(monkeypatch):
+    """colorize_pct() for 90% CPU (above CPU_CRIT) contains a red ANSI code."""
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    result = sysinfo.colorize_pct(90.0, sysinfo.CPU_WARN, sysinfo.CPU_CRIT)
+    assert re.search(r"\x1b\[", result), (
+        f"Expected ANSI escape code in colorize_pct output, got: {result!r}"
+    )
+    import colorama as _colorama
+    assert _colorama.Fore.RED in result, (
+        f"Expected Fore.RED for 90% CPU above CPU_CRIT={sysinfo.CPU_CRIT}, "
+        f"got: {result!r}"
+    )
+
+
+def test_no_color_suppresses_ansi_in_all_color_functions(monkeypatch):
+    """With NO_COLOR set, colorize_pct/format_header/format_label emit no ANSI."""
+    monkeypatch.setenv("NO_COLOR", "1")
+    pct_result = sysinfo.colorize_pct(90.0, sysinfo.CPU_WARN, sysinfo.CPU_CRIT)
+    header_result = sysinfo.format_header("System Info")
+    label_result = sysinfo.format_label("CPU Usage:")
+    for name, result in (
+        ("colorize_pct", pct_result),
+        ("format_header", header_result),
+        ("format_label", label_result),
+    ):
+        assert not re.search(r"\x1b\[", result), (
+            f"Expected no ANSI escape sequences from {name}() when NO_COLOR "
+            f"is set, got: {result!r}"
+        )
+
+
+def test_format_header_contains_bold_ansi(monkeypatch):
+    """format_header() output contains a bold (Style.BRIGHT) ANSI escape code."""
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    import colorama as _colorama
+    result = sysinfo.format_header("System Info")
+    assert _colorama.Style.BRIGHT in result, (
+        f"Expected Style.BRIGHT (bold) in format_header output, got: {result!r}"
+    )
