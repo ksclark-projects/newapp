@@ -298,7 +298,7 @@ def main() -> int:
         dest="mem_json",
         help=(
             "Output memory info as JSON "
-            "({version, memory: {total_gb, used_gb, free_gb, percent}})."
+            "({version, memory: {total_gb, used_gb, available_gb, percent}})."
         ),
     )
 
