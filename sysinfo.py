@@ -231,6 +231,24 @@ def _memory_json_output() -> None:
     ))
 
 
+def _disk_json_output(path: str = "/") -> None:
+    """Print disk info as a versioned JSON object to stdout (no ANSI codes)."""
+    _GiB = 1024 ** 3
+    usage = psutil.disk_usage(path)
+    print(json.dumps(
+        {
+            "version": "1.0",
+            "disk": {
+                "total_gb": round(usage.total / _GiB, 2),
+                "used_gb": round(usage.used / _GiB, 2),
+                "free_gb": round(usage.free / _GiB, 2),
+                "percent": usage.percent,
+            },
+        },
+        indent=2,
+    ))
+
+
 def main() -> int:
     """Entry point for sysinfo CLI."""
     parser = argparse.ArgumentParser(
@@ -286,6 +304,21 @@ def main() -> int:
         ),
     )
 
+    # disk sub-command
+    disk_parser = subparsers.add_parser(
+        "disk",
+        help="Show disk information.",
+    )
+    disk_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="disk_json",
+        help=(
+            "Output disk info as JSON "
+            "({version, disk: {total_gb, used_gb, free_gb, percent}})."
+        ),
+    )
+
     args = parser.parse_args()
 
     # --- cpu sub-command ---
@@ -302,6 +335,12 @@ def main() -> int:
         # No flags: fall through to default human-readable display below,
         # but first ensure --top is valid (default is 10, so normally fine).
         # Reuse the same human-readable output for consistency.
+
+    # --- disk sub-command ---
+    if args.command == "disk":
+        if args.disk_json:
+            _disk_json_output()
+            return 0
 
     if args.command is None:
         # Only validate --top for the top-level (non-sub-command) path.
