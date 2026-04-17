@@ -227,7 +227,10 @@ def main() -> int:
     parser.add_argument(
         "--json",
         action="store_true",
-        help='Output disk metrics as JSON ({"disk": [...]}) and exit.',
+        help=(
+            "Output a full system snapshot as JSON "
+            "(python_version, cpu, memory, disk, top_processes) and exit."
+        ),
     )
     parser.add_argument(
         "--top",
@@ -238,17 +241,25 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    if args.top < 0:
+        parser.error("--top must be >= 0")
+
     if args.python_version:
         print(get_python_version())
         return 0
 
     if args.json:
+        # Collect per-core percentages in a single psutil call, then derive
+        # the overall figure as the mean — avoids two separate 100 ms sleeps
+        # that would otherwise produce an inconsistent overall/cores pair.
+        cores = psutil.cpu_percent(interval=0.1, percpu=True)
+        overall = sum(cores) / len(cores) if cores else 0.0
         print(json.dumps(
             {
                 "python_version": get_python_version(),
                 "cpu": {
-                    "overall": get_cpu_pct(),
-                    "cores": get_cpu_cores(),
+                    "overall": overall,
+                    "cores": cores,
                 },
                 "memory": get_mem_details(),
                 "disk": get_disk_mounts(),
@@ -259,7 +270,9 @@ def main() -> int:
         return 0
 
     mem = get_mem_details()
-    mem_pct = mem["used_mb"] / mem["total_mb"] * 100
+    mem_pct = (
+        mem["used_mb"] / mem["total_mb"] * 100 if mem["total_mb"] else 0.0
+    )
     mem_detail = (
         f"{_fmt_size(mem['used_mb'])} used / "
         f"{_fmt_size(mem['free_mb'])} free / "

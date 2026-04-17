@@ -388,8 +388,7 @@ def test_get_cpu_cores_values_in_range():
 
 def test_get_cpu_cores_count_matches_psutil():
     """get_cpu_cores() returns one entry per logical CPU."""
-    import psutil as _psutil
-    expected = _psutil.cpu_count(logical=True)
+    expected = psutil.cpu_count(logical=True)
     assert len(sysinfo.get_cpu_cores()) == expected, (
         f"Expected {expected} core entries, "
         f"got {len(sysinfo.get_cpu_cores())}"
@@ -408,13 +407,12 @@ def test_no_args_includes_core_lines():
 
 def test_no_args_core_count_matches_cpu_count():
     """Number of 'Core N:' lines equals the logical CPU count."""
-    import psutil as _psutil
     result = run_sysinfo()
     clean = ANSI_ESCAPE.sub("", result.stdout)
     core_lines = [ln for ln in clean.splitlines() if "Core " in ln and ":" in ln]
-    assert len(core_lines) == _psutil.cpu_count(logical=True), (
-        f"Expected {_psutil.cpu_count(logical=True)} core lines, "
-        f"got {len(core_lines)}"
+    expected = psutil.cpu_count(logical=True)
+    assert len(core_lines) == expected, (
+        f"Expected {expected} core lines, got {len(core_lines)}"
     )
 
 
@@ -895,3 +893,76 @@ def test_fmt_size_1024_or_over_returns_gb():
     """_fmt_size() returns GB string for values >= 1024."""
     assert sysinfo._fmt_size(1024.0) == "1.0 GB"
     assert sysinfo._fmt_size(8192.0) == "8.0 GB"
+
+
+# ---------------------------------------------------------------------------
+# Additional tests addressing Riley's review (PR #18)
+# ---------------------------------------------------------------------------
+
+
+def test_json_flag_top_zero_returns_empty_processes():
+    """--json --top 0 outputs top_processes as an empty list."""
+    result = run_sysinfo("--json", "--top", "0")
+    assert result.returncode == 0, (
+        f"Expected exit 0 with --json --top 0, got {result.returncode}"
+    )
+    data = json.loads(result.stdout)
+    assert "top_processes" in data, "Expected top_processes key in JSON output"
+    assert data["top_processes"] == [], (
+        f"Expected empty list for top_processes with --top 0, "
+        f"got: {data['top_processes']!r}"
+    )
+
+
+def test_top_negative_exits_nonzero():
+    """--top with a negative value should exit non-zero with an error message."""
+    result = run_sysinfo("--top", "-1")
+    assert result.returncode != 0, (
+        "Expected non-zero exit code for --top -1"
+    )
+    # argparse writes errors to stderr
+    assert result.stderr, "Expected error message on stderr for --top -1"
+
+
+def test_mem_pct_zero_total_does_not_crash():
+    """main() must not raise ZeroDivisionError when total_mb is 0."""
+    zero_mem = {
+        "used_mb": 0.0,
+        "free_mb": 0.0,
+        "cached_mb": 0.0,
+        "total_mb": 0.0,
+    }
+    with patch.object(sysinfo, "get_mem_details", return_value=zero_mem), \
+         patch.object(sysinfo, "get_disk_mounts", return_value=[]), \
+         patch.object(sysinfo, "get_top_processes", return_value=[]), \
+         patch.object(sysinfo, "get_cpu_pct", return_value=0.0), \
+         patch.object(sysinfo, "get_cpu_cores", return_value=[0.0]), \
+         patch.object(sysinfo, "get_os_version", return_value="Test OS 1.0"), \
+         patch.object(sysinfo, "get_python_version", return_value="3.0.0"):
+        import argparse as _argparse
+
+        class _Args:
+            json = False
+            python_version = False
+            top = 0
+
+        def _fake_parse(self, args=None, namespace=None):
+            return _Args()
+
+        with patch.object(_argparse.ArgumentParser, "parse_args", _fake_parse):
+            rc = sysinfo.main()
+    assert rc == 0, f"Expected exit 0 when total_mb is 0, got {rc}"
+
+
+def test_json_cpu_overall_is_mean_of_cores():
+    """--json cpu.overall equals the mean of cpu.cores (single-call consistency)."""
+    result = run_sysinfo("--json")
+    data = json.loads(result.stdout)
+    cores = data["cpu"]["cores"]
+    if cores:
+        expected_mean = sum(cores) / len(cores)
+        # Allow a small floating-point tolerance
+        assert abs(data["cpu"]["overall"] - expected_mean) < 1e-9, (
+            f"cpu.overall ({data['cpu']['overall']}) does not match "
+            f"mean of cpu.cores ({expected_mean})"
+        )
