@@ -10,6 +10,25 @@ import colorama
 colorama.init(autoreset=True)
 
 
+def format_header(text: str) -> str:
+    """Return *text* wrapped in bold+cyan ANSI codes for section headers."""
+    return (
+        colorama.Style.BRIGHT
+        + colorama.Fore.CYAN
+        + text
+        + colorama.Style.RESET_ALL
+    )
+
+
+def format_label(label: str) -> str:
+    """Return *label* wrapped in yellow ANSI codes for key labels."""
+    return (
+        colorama.Fore.YELLOW
+        + label
+        + colorama.Style.RESET_ALL
+    )
+
+
 def get_os_version() -> str:
     """Return a formatted OS version string.
 
@@ -54,10 +73,8 @@ def main() -> int:
         print(get_python_version())
         return 0
 
-    label = colorama.Fore.CYAN + colorama.Style.BRIGHT
-    reset = colorama.Style.RESET_ALL
-    print(f"{label}OS Version:{reset} {get_os_version()}")
-    print(f"{label}Python:{reset} {get_python_version()}")
+    print(f"{format_label('OS Version:')} {get_os_version()}")
+    print(f"{format_label('Python:')} {get_python_version()}")
     return 0
 
 
