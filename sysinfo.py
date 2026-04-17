@@ -2,6 +2,7 @@
 """sysinfo.py — System information utility."""
 
 import argparse
+import json
 import platform
 import sys
 
@@ -56,6 +57,13 @@ def colorize_pct(value: float, warn: float, crit: float) -> str:
     return color + pct_str + colorama.Style.RESET_ALL
 
 
+def _fmt_size(mb: float) -> str:
+    """Return *mb* as a human-readable string (GB when >= 1024, else MB)."""
+    if mb >= 1024:
+        return f"{mb / 1024:.1f} GB"
+    return f"{mb:.0f} MB"
+
+
 def get_cpu_pct() -> float:
     """Return current CPU usage as a percentage (0.0-100.0)."""
     return psutil.cpu_percent(interval=0.1)
@@ -63,7 +71,7 @@ def get_cpu_pct() -> float:
 
 def get_cpu_cores() -> list:
     """Return per-core CPU usage as a list of floats (0.0-100.0 each)."""
-    return psutil.cpu_percent(percpu=True)
+    return psutil.cpu_percent(interval=0.1, percpu=True)
 
 
 def get_mem_pct() -> float:
@@ -71,9 +79,60 @@ def get_mem_pct() -> float:
     return psutil.virtual_memory().percent
 
 
+def get_mem_details() -> dict:
+    """Return memory usage details as a dict with MB values.
+
+    Keys: used_mb, free_mb, cached_mb, total_mb (all rounded to 1 d.p.)
+
+    - free_mb  : bytes available to user processes (psutil 'available')
+    - cached_mb: OS page-cache bytes; 0 on platforms that don't expose it
+    - used_mb  : bytes actively used (psutil 'used')
+    - total_mb : physical RAM installed
+    """
+    vm = psutil.virtual_memory()
+    _mb = 1024 * 1024
+    return {
+        "used_mb": round(vm.used / _mb, 1),
+        "free_mb": round(vm.available / _mb, 1),
+        "cached_mb": round(getattr(vm, "cached", 0) / _mb, 1),
+        "total_mb": round(vm.total / _mb, 1),
+    }
+
+
 def get_disk_pct(path: str = "/") -> float:
     """Return disk usage for *path* as a percentage (0.0-100.0)."""
     return psutil.disk_usage(path).percent
+
+
+def get_disk_mounts() -> list:
+    """Return disk usage info for every mounted filesystem.
+
+    Iterates psutil.disk_partitions() and collects psutil.disk_usage() for
+    each mount point that is accessible.  Mount points that raise
+    PermissionError or OSError are silently skipped.
+
+    Each entry in the returned list is a dict with keys:
+      mount     (str)   -- mount point path, e.g. '/'
+      used_gb   (float) -- used space in GiB
+      free_gb   (float) -- free space in GiB
+      total_gb  (float) -- total capacity in GiB
+      percent   (float) -- used percentage (0.0-100.0)
+    """
+    _GiB = 1024 ** 3
+    mounts = []
+    for part in psutil.disk_partitions(all=False):
+        try:
+            usage = psutil.disk_usage(part.mountpoint)
+        except (PermissionError, OSError):
+            continue
+        mounts.append({
+            "mount": part.mountpoint,
+            "used_gb": round(usage.used / _GiB, 2),
+            "free_gb": round(usage.free / _GiB, 2),
+            "total_gb": round(usage.total / _GiB, 2),
+            "percent": usage.percent,
+        })
+    return mounts
 
 
 def get_top_processes(n: int = 10) -> list:
@@ -144,6 +203,11 @@ def main() -> int:
         help="Print the current Python version and exit.",
     )
     parser.add_argument(
+        "--json",
+        action="store_true",
+        help='Output disk metrics as JSON ({"disk": [...]}) and exit.',
+    )
+    parser.add_argument(
         "--top",
         type=int,
         default=10,
@@ -156,25 +220,47 @@ def main() -> int:
         print(get_python_version())
         return 0
 
+    if args.json:
+        print(json.dumps(
+            {"memory": get_mem_details(), "disk": get_disk_mounts()},
+            indent=2,
+        ))
+        return 0
+
+    mem = get_mem_details()
+    mem_pct = mem["used_mb"] / mem["total_mb"] * 100
+    mem_detail = (
+        f"{_fmt_size(mem['used_mb'])} used / "
+        f"{_fmt_size(mem['free_mb'])} free / "
+        f"{_fmt_size(mem['total_mb'])} total"
+    )
+
     print(f"{format_label('OS Version:')} {get_os_version()}")
     print(f"{format_label('Python:')} {get_python_version()}")
     print(
         f"{format_label('CPU Usage:')} "
         f"{colorize_pct(get_cpu_pct(), CPU_WARN, CPU_CRIT)}"
     )
-    for i, pct in enumerate(get_cpu_cores()):
+    for i, core_pct in enumerate(get_cpu_cores()):
         print(
-            f"{format_label(f'  Core {i}:')} "
-            f"{colorize_pct(pct, CPU_WARN, CPU_CRIT)}"
+            f"  {format_label(f'Core {i}:')} "
+            f"{colorize_pct(core_pct, CPU_WARN, CPU_CRIT)}"
         )
     print(
         f"{format_label('Memory Usage:')} "
-        f"{colorize_pct(get_mem_pct(), MEM_WARN, MEM_CRIT)}"
+        f"{colorize_pct(mem_pct, MEM_WARN, MEM_CRIT)}"
+        f"  ({mem_detail})"
     )
-    print(
-        f"{format_label('Disk Usage:')} "
-        f"{colorize_pct(get_disk_pct(), DISK_WARN, DISK_CRIT)}"
-    )
+
+    print(format_header("Disk Usage:"))
+    for mount in get_disk_mounts():
+        pct_str = colorize_pct(mount["percent"], DISK_WARN, DISK_CRIT)
+        print(
+            f"  {format_label(mount['mount'] + ':')} "
+            f"{pct_str} "
+            f"({mount['used_gb']:.1f} / {mount['total_gb']:.1f} GiB, "
+            f"{mount['free_gb']:.1f} GiB free)"
+        )
 
     if args.top > 0:
         print()
