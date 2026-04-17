@@ -349,3 +349,98 @@ def test_no_args_includes_disk_line():
     assert "Disk Usage:" in result.stdout, (
         "Expected 'Disk Usage:' line in default output"
     )
+
+
+# ---------------------------------------------------------------------------
+# Per-core CPU tests  (newapp-pc8)
+# ---------------------------------------------------------------------------
+
+
+def test_get_cpu_cores_returns_list():
+    """get_cpu_cores() returns a non-empty list."""
+    result = sysinfo.get_cpu_cores()
+    assert isinstance(result, list), (
+        f"Expected list from get_cpu_cores(), got: {type(result)}"
+    )
+    assert len(result) > 0, "Expected at least one core"
+
+
+def test_get_cpu_cores_values_in_range():
+    """get_cpu_cores() values are floats in 0.0–100.0."""
+    cores = sysinfo.get_cpu_cores()
+    for i, pct in enumerate(cores):
+        assert isinstance(pct, float), (
+            f"Core {i} value should be float, got {type(pct)}: {pct!r}"
+        )
+        assert 0.0 <= pct <= 100.0, (
+            f"Core {i} percentage {pct} out of range [0.0, 100.0]"
+        )
+
+
+def test_get_cpu_cores_count_matches_psutil():
+    """get_cpu_cores() returns one entry per logical CPU."""
+    import psutil as _psutil
+    expected = _psutil.cpu_count(logical=True)
+    assert len(sysinfo.get_cpu_cores()) == expected, (
+        f"Expected {expected} core entries, "
+        f"got {len(sysinfo.get_cpu_cores())}"
+    )
+
+
+def test_no_args_includes_core_lines():
+    """Default output must include at least one 'Core N:' line."""
+    result = run_sysinfo()
+    clean = ANSI_ESCAPE.sub("", result.stdout)
+    core_lines = [ln for ln in clean.splitlines() if "Core " in ln and ":" in ln]
+    assert len(core_lines) > 0, (
+        "Expected at least one 'Core N:' line in default output"
+    )
+
+
+def test_no_args_core_count_matches_cpu_count():
+    """Number of 'Core N:' lines equals the logical CPU count."""
+    import psutil as _psutil
+    result = run_sysinfo()
+    clean = ANSI_ESCAPE.sub("", result.stdout)
+    core_lines = [ln for ln in clean.splitlines() if "Core " in ln and ":" in ln]
+    assert len(core_lines) == _psutil.cpu_count(logical=True), (
+        f"Expected {_psutil.cpu_count(logical=True)} core lines, "
+        f"got {len(core_lines)}"
+    )
+
+
+def test_no_args_core_lines_contain_percentage():
+    """Each 'Core N:' line in output contains a percentage value."""
+    result = run_sysinfo()
+    clean = ANSI_ESCAPE.sub("", result.stdout)
+    core_lines = [ln for ln in clean.splitlines() if "Core " in ln and ":" in ln]
+    for line in core_lines:
+        assert re.search(r"\d+\.\d+%", line), (
+            f"Core line missing percentage value: {line!r}"
+        )
+
+
+def test_no_args_core_lines_after_cpu_usage():
+    """Per-core lines appear immediately after the 'CPU Usage:' line."""
+    result = run_sysinfo()
+    clean = ANSI_ESCAPE.sub("", result.stdout)
+    lines = clean.splitlines()
+    cpu_idx = next(
+        (i for i, l in enumerate(lines) if l.startswith("CPU Usage:")), None
+    )
+    assert cpu_idx is not None, "CPU Usage line not found"
+    # The line right after CPU Usage should be a core line
+    assert cpu_idx + 1 < len(lines), "No line after CPU Usage"
+    assert "Core 0:" in lines[cpu_idx + 1], (
+        f"Expected 'Core 0:' after CPU Usage line, got: {lines[cpu_idx+1]!r}"
+    )
+
+
+def test_get_cpu_cores_mocked():
+    """get_cpu_cores() returns the mocked per-core list."""
+    mock_cores = [10.0, 20.0, 30.0, 40.0]
+    with patch("psutil.cpu_percent", return_value=mock_cores):
+        result = sysinfo.get_cpu_cores()
+    assert result == mock_cores, (
+        f"Expected mocked core list {mock_cores!r}, got {result!r}"
+    )
