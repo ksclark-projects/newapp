@@ -1147,11 +1147,11 @@ def test_memory_json_has_version_and_memory_keys():
 
 
 def test_memory_json_memory_has_required_keys():
-    """memory --json 'memory' dict contains total_gb, used_gb, free_gb, percent."""
+    """memory --json 'memory' dict contains total_gb, used_gb, available_gb, percent."""
     result = run_sysinfo("memory", "--json")
     data = json.loads(result.stdout)
     mem = data["memory"]
-    for key in ("total_gb", "used_gb", "free_gb", "percent"):
+    for key in ("total_gb", "used_gb", "available_gb", "percent"):
         assert key in mem, (
             f"Expected key '{key}' in memory --json output, got: {list(mem)}"
         )
@@ -1180,7 +1180,7 @@ def test_memory_json_values_are_numeric():
     result = run_sysinfo("memory", "--json")
     data = json.loads(result.stdout)
     mem = data["memory"]
-    for key in ("total_gb", "used_gb", "free_gb"):
+    for key in ("total_gb", "used_gb", "available_gb"):
         assert isinstance(mem[key], (int, float)) and mem[key] >= 0, (
             f"Expected non-negative number for '{key}', got: {mem[key]!r}"
         )
