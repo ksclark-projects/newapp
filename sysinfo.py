@@ -5,6 +5,10 @@ import argparse
 import platform
 import sys
 
+import colorama
+
+colorama.init(autoreset=True)
+
 
 def get_os_version() -> str:
     """Return a formatted OS version string.
@@ -50,8 +54,10 @@ def main() -> int:
         print(get_python_version())
         return 0
 
-    print(f"OS Version: {get_os_version()}")
-    print(f"Python: {get_python_version()}")
+    label = colorama.Fore.CYAN + colorama.Style.BRIGHT
+    reset = colorama.Style.RESET_ALL
+    print(f"{label}OS Version:{reset} {get_os_version()}")
+    print(f"{label}Python:{reset} {get_python_version()}")
     return 0
 
 

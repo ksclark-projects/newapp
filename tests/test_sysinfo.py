@@ -9,6 +9,9 @@ import pytest  # noqa: F401 — used for potential future parametrize
 
 import sysinfo
 
+# Regex to strip ANSI escape codes from output
+ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -76,7 +79,9 @@ def test_no_args_includes_os_version_line():
 def test_no_args_os_version_before_python():
     """OS Version line must appear before Python line in default output."""
     result = run_sysinfo()
-    lines = result.stdout.splitlines()
+    # Strip ANSI escape codes so startswith checks work regardless of color
+    clean = ANSI_ESCAPE.sub("", result.stdout)
+    lines = clean.splitlines()
     os_idx = next(
         (i for i, l in enumerate(lines) if l.startswith("OS Version:")), None
     )
