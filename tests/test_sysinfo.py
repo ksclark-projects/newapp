@@ -948,6 +948,7 @@ def test_mem_pct_zero_total_does_not_crash():
             python_version = False
             top = 0
             filter = None
+            sort = None
 
         def _fake_parse(self, args=None, namespace=None):
             return _Args()
@@ -1459,6 +1460,7 @@ def test_top_level_json_error_unit_nonzero_exit():
         json = True
         python_version = False
         top = 10
+        sort = None
 
     def _fake_parse(self, args=None, namespace=None):
         return _Args()
@@ -1534,6 +1536,7 @@ def _run_main_with_args(extra_args, proc_list=None, top=10):
         python_version = False
         top = _top
         filter = _filter_val
+        sort = None
 
     stdout_buf = io.StringIO()
     stderr_buf = io.StringIO()
@@ -1643,6 +1646,7 @@ def test_filter_json_filters_top_processes():
         python_version = False
         top = 10
         filter = "nginx"
+        sort = None
 
     stdout_buf = io.StringIO()
 
@@ -1680,6 +1684,7 @@ def test_filter_json_no_match_returns_empty_list():
         python_version = False
         top = 10
         filter = "nginx"
+        sort = None
 
     stdout_buf = io.StringIO()
 
@@ -1766,4 +1771,189 @@ def test_filter_with_subcommand_does_not_affect_output():
     data_with_filter = json.loads(result_with_filter.stdout)
     assert set(data_no_filter.keys()) == set(data_with_filter.keys()), (
         "--filter should not alter the keys returned by the cpu subcommand"
+    )
+
+
+# ---------------------------------------------------------------------------
+# --sort flag tests  (newapp-js3.2)
+# ---------------------------------------------------------------------------
+
+
+def _run_main_with_sort(sort_val, proc_list=None, top=10):
+    """Run sysinfo.main() with a given --sort value and optional mock proc list.
+
+    Captures stdout/stderr and returns (returncode, stdout_str, stderr_str).
+    """
+    import argparse as _argparse
+    import io
+    from contextlib import ExitStack
+
+    _top = top
+
+    class _Args:
+        command = None
+        json = False
+        python_version = False
+        top = _top
+        filter = None
+        sort = sort_val
+
+    stdout_buf = io.StringIO()
+    stderr_buf = io.StringIO()
+
+    ctx = [
+        patch("sys.stdout", stdout_buf),
+        patch("sys.stderr", stderr_buf),
+    ]
+    if proc_list is not None:
+        ctx.append(
+            patch.object(sysinfo, "get_top_processes", return_value=proc_list)
+        )
+
+    def _fake_parse(self, args=None, namespace=None):
+        return _Args()
+
+    with patch.object(_argparse.ArgumentParser, "parse_args", _fake_parse):
+        with ExitStack() as stack:
+            for c in ctx:
+                stack.enter_context(c)
+            rc = sysinfo.main()
+
+    return rc, stdout_buf.getvalue(), stderr_buf.getvalue()
+
+
+def test_sort_mem_produces_descending_mem_order():
+    """--sort=mem outputs processes in descending memory usage order."""
+    # Processes deliberately NOT in mem% order (CPU% descending, as the real
+    # get_top_processes returns).
+    procs = [
+        {"pid": 1, "name": "highcpu",  "cpu_pct": 80.0, "mem_pct":  1.0},
+        {"pid": 2, "name": "midcpu",   "cpu_pct": 40.0, "mem_pct": 50.0},
+        {"pid": 3, "name": "lowcpu",   "cpu_pct":  5.0, "mem_pct": 90.0},
+    ]
+    rc, stdout, _ = _run_main_with_sort("mem", proc_list=procs)
+    clean = ANSI_ESCAPE.sub("", stdout)
+    assert rc == 0, f"Expected exit 0 with --sort=mem, got {rc}"
+
+    # Verify the names appear in descending mem% order in the output.
+    idx_low = clean.find("lowcpu")    # highest mem (90%)
+    idx_mid = clean.find("midcpu")    # middle mem  (50%)
+    idx_high = clean.find("highcpu")  # lowest mem  (1%)
+    assert idx_low != -1 and idx_mid != -1 and idx_high != -1, (
+        f"One or more process names missing from output: {clean!r}"
+    )
+    assert idx_low < idx_mid < idx_high, (
+        "Expected descending mem% order: lowcpu (90%) → midcpu (50%) → highcpu (1%); "
+        f"got positions: lowcpu={idx_low}, midcpu={idx_mid}, highcpu={idx_high}"
+    )
+
+
+def test_sort_mem_header_shows_mem_label():
+    """--sort=mem updates the section header to show 'MEM%' instead of 'CPU%'."""
+    procs = [
+        {"pid": 1, "name": "proc1", "cpu_pct": 10.0, "mem_pct": 5.0},
+    ]
+    rc, stdout, _ = _run_main_with_sort("mem", proc_list=procs)
+    clean = ANSI_ESCAPE.sub("", stdout)
+    assert rc == 0, f"Expected exit 0 with --sort=mem, got {rc}"
+    assert "MEM%" in clean, (
+        f"Expected 'MEM%' in section header when --sort=mem, got: {clean!r}"
+    )
+    assert "CPU%" not in clean or "MEM%" in clean, (
+        "Expected header to use MEM% label when sorted by memory"
+    )
+
+
+def test_default_sort_order_unchanged_without_flag():
+    """Without --sort, processes appear in get_top_processes order (CPU%)."""
+    # Simulate CPU%-sorted output from get_top_processes (highest CPU first).
+    procs = [
+        {"pid": 1, "name": "highcpu",  "cpu_pct": 80.0, "mem_pct": 10.0},
+        {"pid": 2, "name": "midcpu",   "cpu_pct": 40.0, "mem_pct": 50.0},
+        {"pid": 3, "name": "lowcpu",   "cpu_pct":  5.0, "mem_pct": 90.0},
+    ]
+    rc, stdout, _ = _run_main_with_sort(None, proc_list=procs)
+    clean = ANSI_ESCAPE.sub("", stdout)
+    assert rc == 0, f"Expected exit 0 without --sort, got {rc}"
+
+    # Without --sort=mem, the order from the mock is preserved (CPU% desc).
+    idx_high = clean.find("highcpu")
+    idx_mid = clean.find("midcpu")
+    idx_low = clean.find("lowcpu")
+    assert idx_high != -1 and idx_mid != -1 and idx_low != -1, (
+        f"One or more process names missing from output: {clean!r}"
+    )
+    assert idx_high < idx_mid < idx_low, (
+        "Expected CPU%-descending order (no re-sort): "
+        f"highcpu→midcpu→lowcpu; got: {idx_high}, {idx_mid}, {idx_low}"
+    )
+
+
+def test_default_sort_header_shows_cpu_label():
+    """Without --sort, the section header labels the sort key as 'CPU%'."""
+    procs = [
+        {"pid": 1, "name": "proc1", "cpu_pct": 10.0, "mem_pct": 5.0},
+    ]
+    rc, stdout, _ = _run_main_with_sort(None, proc_list=procs)
+    clean = ANSI_ESCAPE.sub("", stdout)
+    assert rc == 0, f"Expected exit 0 without --sort, got {rc}"
+    assert "CPU%" in clean, (
+        f"Expected 'CPU%' in section header without --sort, got: {clean!r}"
+    )
+
+
+def test_sort_invalid_key_exits_nonzero():
+    """--sort=foo exits non-zero with an error message listing valid options."""
+    result = run_sysinfo("--sort=foo")
+    assert result.returncode != 0, (
+        "Expected non-zero exit code for --sort=foo (invalid key)"
+    )
+    combined = result.stdout + result.stderr
+    assert "mem" in combined.lower(), (
+        f"Expected error to mention 'mem' as a valid option, got: {combined!r}"
+    )
+
+
+def test_sort_invalid_key_error_on_stderr():
+    """--sort=foo writes the error message to stderr (not stdout)."""
+    result = run_sysinfo("--sort=foo")
+    assert result.returncode != 0
+    assert result.stderr, "Expected error text on stderr for --sort=foo"
+
+
+def test_sort_mem_json_output_respects_mem_order():
+    """--sort=mem with --json returns top_processes sorted by mem_pct descending."""
+    import argparse as _argparse
+    import io
+
+    procs = [
+        {"pid": 1, "name": "highcpu",  "cpu_pct": 80.0, "mem_pct":  1.0},
+        {"pid": 2, "name": "midcpu",   "cpu_pct": 40.0, "mem_pct": 50.0},
+        {"pid": 3, "name": "lowcpu",   "cpu_pct":  5.0, "mem_pct": 90.0},
+    ]
+
+    class _Args:
+        command = None
+        json = True
+        python_version = False
+        top = 10
+        filter = None
+        sort = "mem"
+
+    stdout_buf = io.StringIO()
+
+    def _fake_parse(self, args=None, namespace=None):
+        return _Args()
+
+    with patch.object(_argparse.ArgumentParser, "parse_args", _fake_parse), \
+         patch.object(sysinfo, "get_top_processes", return_value=procs), \
+         patch("sys.stdout", stdout_buf):
+        rc = sysinfo.main()
+
+    assert rc == 0, f"Expected exit 0 with --sort=mem --json, got {rc}"
+    data = json.loads(stdout_buf.getvalue())
+    mem_values = [p["mem_pct"] for p in data["top_processes"]]
+    assert mem_values == sorted(mem_values, reverse=True), (
+        f"Expected top_processes sorted by mem_pct descending in JSON, "
+        f"got: {mem_values}"
     )
