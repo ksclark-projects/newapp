@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import os
 import platform
 import sys
 
@@ -337,6 +338,17 @@ def main() -> int:
         metavar="N",
         help="Show top N processes by CPU%% (default: 10; 0 to disable).",
     )
+    parser.add_argument(
+        "--filter",
+        type=str,
+        default=None,
+        metavar="PATTERN",
+        help=(
+            "Filter the process list to names containing PATTERN "
+            "(case-insensitive substring match). "
+            "Must be a non-empty string."
+        ),
+    )
 
     subparsers = parser.add_subparsers(dest="command")
 
@@ -383,6 +395,15 @@ def main() -> int:
     )
 
     args = parser.parse_args()
+
+    # Validate --filter: reject empty (or whitespace-only) strings.
+    _filter = getattr(args, 'filter', None)
+    if _filter is not None and _filter.strip() == "":
+        _msg = "--filter value must not be empty; provide a non-empty pattern"
+        if getattr(args, 'json', False):
+            print(json.dumps({"error": _msg}), file=sys.stderr)
+            return 1
+        parser.error(_msg)
 
     # --- cpu sub-command ---
     if args.command == "cpu":
@@ -441,6 +462,11 @@ def main() -> int:
             # that would otherwise produce an inconsistent overall/cores pair.
             cores = psutil.cpu_percent(interval=0.1, percpu=True)
             overall = sum(cores) / len(cores) if cores else 0.0
+            top_procs = get_top_processes(args.top)
+            if _filter is not None:
+                _pat = _filter.lower()
+                top_procs = [p for p in top_procs
+                             if _pat in p['name'].lower()]
             print(json.dumps(
                 {
                     "version": "1.0",
@@ -451,7 +477,7 @@ def main() -> int:
                     },
                     "memory": get_mem_details(),
                     "disk": get_disk_mounts(),
-                    "top_processes": get_top_processes(args.top),
+                    "top_processes": top_procs,
                 },
                 indent=2,
             ))
@@ -499,13 +525,20 @@ def main() -> int:
 
     if args.top > 0:
         print()
+        top_procs = get_top_processes(args.top)
+        if _filter is not None:
+            _pat = _filter.lower()
+            top_procs = [p for p in top_procs if _pat in p['name'].lower()]
         print(format_header(f"Top {args.top} Processes (by CPU%):"))
-        print(f"  {'PID':>7}  {'Name':<20}  {'CPU%':>7}  {'MEM%':>7}")
-        for proc in get_top_processes(args.top):
-            cpu_str = colorize_pct(proc['cpu_pct'], CPU_WARN, CPU_CRIT)
-            mem_str = colorize_pct(proc['mem_pct'], MEM_WARN, MEM_CRIT)
-            name = proc['name'][:20]
-            print(f"  {proc['pid']:>7}  {name:<20}  {cpu_str}  {mem_str}")
+        if not top_procs:
+            print("  No matching processes")
+        else:
+            print(f"  {'PID':>7}  {'Name':<20}  {'CPU%':>7}  {'MEM%':>7}")
+            for proc in top_procs:
+                cpu_str = colorize_pct(proc['cpu_pct'], CPU_WARN, CPU_CRIT)
+                mem_str = colorize_pct(proc['mem_pct'], MEM_WARN, MEM_CRIT)
+                name = proc['name'][:20]
+                print(f"  {proc['pid']:>7}  {name:<20}  {cpu_str}  {mem_str}")
 
     return 0
 
