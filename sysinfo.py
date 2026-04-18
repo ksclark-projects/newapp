@@ -375,9 +375,8 @@ def main() -> int:
         type=str,
         default=None,
         choices=["mem"],
-        metavar="KEY",
         help=(
-            "Sort the process list by KEY. "
+            "Sort the process list by the given key. "
             "Valid values: mem (memory usage %%). "
             "Default: CPU%% descending. "
             "Unrecognized values are rejected with a helpful error."
@@ -434,7 +433,7 @@ def main() -> int:
     _filter = args.filter
     if _filter is not None and _filter.strip() == "":
         _msg = "--filter value must not be empty; provide a non-empty pattern"
-        if getattr(args, 'json', False):
+        if args.json:
             print(json.dumps({"error": _msg}), file=sys.stderr)
             return 1
         parser.error(_msg)
