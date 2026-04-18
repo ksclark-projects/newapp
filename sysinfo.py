@@ -450,6 +450,16 @@ def main() -> int:
             file=sys.stderr,
         )
 
+    # --sort only applies to the default (no-subcommand) process list view.
+    # Warn the user if they combine it with a subcommand so it isn't silently
+    # discarded.
+    if getattr(args, 'sort', None) is not None and args.command is not None:
+        print(
+            f"Warning: --sort has no effect with the '{args.command}' "
+            "subcommand and will be ignored.",
+            file=sys.stderr,
+        )
+
     # --- cpu sub-command ---
     if args.command == "cpu":
         if args.cpu_json:
@@ -510,7 +520,7 @@ def main() -> int:
             top_procs = _apply_filter(get_top_processes(args.top), _filter)
             if args.sort == "mem":
                 top_procs = sorted(
-                    top_procs, key=lambda p: p["mem_pct"], reverse=True
+                    top_procs, key=lambda p: p.get("mem_pct", 0.0), reverse=True
                 )
             print(json.dumps(
                 {
@@ -573,7 +583,7 @@ def main() -> int:
         top_procs = _apply_filter(get_top_processes(args.top), _filter)
         if args.sort == "mem":
             top_procs = sorted(
-                top_procs, key=lambda p: p["mem_pct"], reverse=True
+                top_procs, key=lambda p: p.get("mem_pct", 0.0), reverse=True
             )
         sort_label = "MEM%" if args.sort == "mem" else "CPU%"
         print(format_header(f"Top {args.top} Processes (by {sort_label}):"))

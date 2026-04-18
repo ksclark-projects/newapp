@@ -1957,3 +1957,26 @@ def test_sort_mem_json_output_respects_mem_order():
         f"Expected top_processes sorted by mem_pct descending in JSON, "
         f"got: {mem_values}"
     )
+
+
+def test_sort_with_subcommand_emits_warning():
+    """--sort combined with a subcommand should emit a warning on stderr.
+
+    Note: --sort is a top-level flag; it must appear before the subcommand
+    name on the command line (e.g. ``--sort=mem cpu --json``).
+    """
+    result = run_sysinfo("--sort=mem", "cpu", "--json")
+    # The subcommand should still succeed
+    assert result.returncode == 0, (
+        f"Expected exit 0 when --sort is combined with 'cpu', "
+        f"got {result.returncode}"
+    )
+    # A human-readable warning should appear on stderr
+    assert "warning" in result.stderr.lower(), (
+        f"Expected a warning about --sort being ignored with 'cpu', "
+        f"got stderr: {result.stderr!r}"
+    )
+    assert "cpu" in result.stderr.lower(), (
+        f"Expected warning to mention 'cpu' subcommand, "
+        f"got stderr: {result.stderr!r}"
+    )
