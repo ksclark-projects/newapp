@@ -1980,3 +1980,223 @@ def test_sort_with_subcommand_emits_warning():
         f"Expected warning to mention 'cpu' subcommand, "
         f"got stderr: {result.stderr!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Combined --filter + --sort=mem tests  (newapp-js3.3 / US-003)
+# ---------------------------------------------------------------------------
+
+
+def _run_main_with_filter_and_sort(filter_val, sort_val, proc_list=None, top=10):
+    """Run sysinfo.main() with both --filter and --sort configured.
+
+    Captures stdout/stderr and returns (returncode, stdout_str, stderr_str).
+    """
+    import argparse as _argparse
+    import io
+    from contextlib import ExitStack
+
+    _top = top
+
+    class _Args:
+        command = None
+        json = False
+        python_version = False
+        top = _top
+        filter = filter_val
+        sort = sort_val
+
+    stdout_buf = io.StringIO()
+    stderr_buf = io.StringIO()
+
+    ctx = [
+        patch("sys.stdout", stdout_buf),
+        patch("sys.stderr", stderr_buf),
+    ]
+    if proc_list is not None:
+        ctx.append(
+            patch.object(sysinfo, "get_top_processes", return_value=proc_list)
+        )
+
+    def _fake_parse(self, args=None, namespace=None):
+        return _Args()
+
+    with patch.object(_argparse.ArgumentParser, "parse_args", _fake_parse):
+        with ExitStack() as stack:
+            for c in ctx:
+                stack.enter_context(c)
+            rc = sysinfo.main()
+
+    return rc, stdout_buf.getvalue(), stderr_buf.getvalue()
+
+
+def test_filter_and_sort_mem_combined_plain():
+    """--filter + --sort=mem filters first then sorts filtered procs by mem%."""
+    procs = [
+        {"pid": 1, "name": "python-high-cpu", "cpu_pct": 80.0, "mem_pct":  1.0},
+        {"pid": 2, "name": "python-high-mem", "cpu_pct":  5.0, "mem_pct": 90.0},
+        {"pid": 3, "name": "nginx-worker",    "cpu_pct": 40.0, "mem_pct": 50.0},
+        {"pid": 4, "name": "python-mid-mem",  "cpu_pct": 20.0, "mem_pct": 30.0},
+    ]
+    rc, stdout, _ = _run_main_with_filter_and_sort("python", "mem", proc_list=procs)
+    clean = ANSI_ESCAPE.sub("", stdout)
+    assert rc == 0, f"Expected exit 0 with --filter=python --sort=mem, got {rc}"
+
+    # Only python processes should appear
+    assert "python-high-cpu" in clean, "Expected python-high-cpu in output"
+    assert "python-high-mem" in clean, "Expected python-high-mem in output"
+    assert "python-mid-mem" in clean, "Expected python-mid-mem in output"
+    assert "nginx-worker" not in clean, (
+        "Expected nginx-worker to be excluded by --filter=python"
+    )
+
+    # Python processes should be in descending mem% order:
+    # python-high-mem (90%) -> python-mid-mem (30%) -> python-high-cpu (1%)
+    idx_high_mem = clean.find("python-high-mem")
+    idx_mid_mem = clean.find("python-mid-mem")
+    idx_high_cpu = clean.find("python-high-cpu")
+    assert idx_high_mem < idx_mid_mem < idx_high_cpu, (
+        "Expected descending mem% order after filtering: "
+        "python-high-mem (90%) -> python-mid-mem (30%) -> python-high-cpu (1%); "
+        f"got positions: python-high-mem={idx_high_mem}, "
+        f"python-mid-mem={idx_mid_mem}, python-high-cpu={idx_high_cpu}"
+    )
+
+
+def test_filter_and_sort_mem_combined_json():
+    """--filter + --sort=mem in JSON mode: only matching procs, sorted by mem%."""
+    import argparse as _argparse
+    import io
+
+    procs = [
+        {"pid": 1, "name": "python-high-cpu", "cpu_pct": 80.0, "mem_pct":  1.0},
+        {"pid": 2, "name": "python-high-mem", "cpu_pct":  5.0, "mem_pct": 90.0},
+        {"pid": 3, "name": "nginx-worker",    "cpu_pct": 40.0, "mem_pct": 50.0},
+        {"pid": 4, "name": "python-mid-mem",  "cpu_pct": 20.0, "mem_pct": 30.0},
+    ]
+
+    class _Args:
+        command = None
+        json = True
+        python_version = False
+        top = 10
+        filter = "python"
+        sort = "mem"
+
+    stdout_buf = io.StringIO()
+
+    def _fake_parse(self, args=None, namespace=None):
+        return _Args()
+
+    with patch.object(_argparse.ArgumentParser, "parse_args", _fake_parse), \
+         patch.object(sysinfo, "get_top_processes", return_value=procs), \
+         patch("sys.stdout", stdout_buf):
+        rc = sysinfo.main()
+
+    assert rc == 0, (
+        f"Expected exit 0 with json+filter=python+sort=mem, got {rc}"
+    )
+    data = json.loads(stdout_buf.getvalue())
+
+    names = [p["name"] for p in data["top_processes"]]
+    assert all("python" in n.lower() for n in names), (
+        f"Expected only python processes in top_processes, got: {names}"
+    )
+    assert "nginx-worker" not in names, (
+        "Expected nginx-worker excluded by filter=python"
+    )
+
+    mem_values = [p["mem_pct"] for p in data["top_processes"]]
+    assert mem_values == sorted(mem_values, reverse=True), (
+        f"Expected top_processes sorted by mem_pct descending, got: {mem_values}"
+    )
+
+
+def test_filter_applied_before_sort():
+    """Filter is applied before sort: non-matching processes never appear."""
+    procs = [
+        {"pid": 1, "name": "python3",    "cpu_pct": 10.0, "mem_pct": 80.0},
+        {"pid": 2, "name": "nginx",      "cpu_pct": 20.0, "mem_pct": 60.0},
+        {"pid": 3, "name": "python-alt", "cpu_pct":  5.0, "mem_pct": 40.0},
+    ]
+    rc, stdout, _ = _run_main_with_filter_and_sort("python", "mem", proc_list=procs)
+    clean = ANSI_ESCAPE.sub("", stdout)
+    assert rc == 0
+    # nginx was filtered out even though it had a high mem%
+    assert "nginx" not in clean, (
+        "nginx should be excluded by filter before sort is applied"
+    )
+    # python procs appear in mem% descending order
+    idx_py3 = clean.find("python3")      # mem 80%
+    idx_pyalt = clean.find("python-alt")  # mem 40%
+    assert idx_py3 < idx_pyalt, (
+        "Expected python3 (80% mem) before python-alt (40% mem) after sort"
+    )
+
+
+def test_filter_only_no_sort_flag():
+    """--filter without --sort preserves the CPU% order from get_top_processes."""
+    procs = [
+        {"pid": 1, "name": "python-highcpu", "cpu_pct": 80.0, "mem_pct": 10.0},
+        {"pid": 2, "name": "nginx",           "cpu_pct": 40.0, "mem_pct": 50.0},
+        {"pid": 3, "name": "python-lowcpu",   "cpu_pct":  5.0, "mem_pct": 90.0},
+    ]
+    rc, stdout, _ = _run_main_with_filter_and_sort("python", None, proc_list=procs)
+    clean = ANSI_ESCAPE.sub("", stdout)
+    assert rc == 0, f"Expected exit 0 with --filter=python (no sort), got {rc}"
+    assert "nginx" not in clean, "Expected nginx excluded by --filter=python"
+    # CPU% order (as returned by get_top_processes) is preserved
+    idx_high = clean.find("python-highcpu")
+    idx_low = clean.find("python-lowcpu")
+    assert idx_high < idx_low, (
+        "Expected CPU%-descending order preserved when --sort not specified"
+    )
+
+
+def test_sort_only_no_filter_flag():
+    """--sort=mem without --filter sorts all processes by mem% descending."""
+    procs = [
+        {"pid": 1, "name": "highcpu", "cpu_pct": 80.0, "mem_pct":  1.0},
+        {"pid": 2, "name": "midcpu",  "cpu_pct": 40.0, "mem_pct": 50.0},
+        {"pid": 3, "name": "lowcpu",  "cpu_pct":  5.0, "mem_pct": 90.0},
+    ]
+    rc, stdout, _ = _run_main_with_filter_and_sort(None, "mem", proc_list=procs)
+    clean = ANSI_ESCAPE.sub("", stdout)
+    assert rc == 0, f"Expected exit 0 with --sort=mem (no filter), got {rc}"
+
+    assert "highcpu" in clean
+    assert "midcpu" in clean
+    assert "lowcpu" in clean
+
+    # Sorted by mem% desc: lowcpu(90%) -> midcpu(50%) -> highcpu(1%)
+    idx_low = clean.find("lowcpu")
+    idx_mid = clean.find("midcpu")
+    idx_high = clean.find("highcpu")
+    assert idx_low < idx_mid < idx_high, (
+        "Expected descending mem% order (no filter): "
+        f"lowcpu->midcpu->highcpu; got {idx_low}, {idx_mid}, {idx_high}"
+    )
+
+
+def test_both_flags_independently_optional():
+    """Both --filter and --sort are independently optional (all combos exit 0)."""
+    procs = [
+        {"pid": 1, "name": "proc1", "cpu_pct": 50.0, "mem_pct": 20.0},
+        {"pid": 2, "name": "proc2", "cpu_pct": 30.0, "mem_pct": 40.0},
+    ]
+    rc_neither, _, _ = _run_main_with_filter_and_sort(
+        None, None, proc_list=procs
+    )
+    rc_filter, _, _ = _run_main_with_filter_and_sort(
+        "proc", None, proc_list=procs
+    )
+    rc_sort, _, _ = _run_main_with_filter_and_sort(
+        None, "mem", proc_list=procs
+    )
+    rc_both, _, _ = _run_main_with_filter_and_sort(
+        "proc", "mem", proc_list=procs
+    )
+    assert rc_neither == 0, "Expected exit 0 with no flags"
+    assert rc_filter == 0, "Expected exit 0 with --filter only"
+    assert rc_sort == 0, "Expected exit 0 with --sort only"
+    assert rc_both == 0, "Expected exit 0 with both --filter and --sort"
