@@ -947,6 +947,7 @@ def test_mem_pct_zero_total_does_not_crash():
             json = False
             python_version = False
             top = 0
+            filter = None
 
         def _fake_parse(self, args=None, namespace=None):
             return _Args()
@@ -1380,7 +1381,7 @@ def _run_error_scenario(command_attr, json_flag_attr, patch_target,
     import argparse as _argparse
     import io
 
-    attrs = {command_attr: True}
+    attrs = {command_attr: True, "filter": None}
     if extra_attrs:
         attrs.update(extra_attrs)
 
@@ -1454,6 +1455,7 @@ def test_top_level_json_error_unit_nonzero_exit():
 
     class _Args:
         command = None
+        filter = None
         json = True
         python_version = False
         top = 10
@@ -1510,6 +1512,194 @@ def test_json_error_stdout_empty_on_cpu_failure():
 
 
 # ---------------------------------------------------------------------------
+# --filter flag tests  (newapp-js3.1)
+# ---------------------------------------------------------------------------
+
+
+def _run_main_with_args(extra_args, proc_list=None, top=10):
+    """Run sysinfo.main() directly using a patched args namespace.
+
+    Captures stdout/stderr and returns (returncode, stdout_str, stderr_str).
+    proc_list, when given, replaces get_top_processes() output.
+    """
+    import argparse as _argparse
+    import io
+
+    _top = top
+    _filter_val = extra_args.get("filter", None)
+
+    class _Args:
+        command = None
+        json = False
+        python_version = False
+        top = _top
+        filter = _filter_val
+
+    stdout_buf = io.StringIO()
+    stderr_buf = io.StringIO()
+
+    ctx = [
+        patch("sys.stdout", stdout_buf),
+        patch("sys.stderr", stderr_buf),
+    ]
+    if proc_list is not None:
+        ctx.append(
+            patch.object(sysinfo, "get_top_processes", return_value=proc_list)
+        )
+
+    def _fake_parse(self, args=None, namespace=None):
+        return _Args()
+
+    with patch.object(_argparse.ArgumentParser, "parse_args", _fake_parse):
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            for c in ctx:
+                stack.enter_context(c)
+            rc = sysinfo.main()
+
+    return rc, stdout_buf.getvalue(), stderr_buf.getvalue()
+
+
+def test_filter_matches_processes_case_insensitive():
+    """--filter shows only processes whose name contains the pattern."""
+    procs = [
+        {"pid": 1, "name": "nginx-worker", "cpu_pct": 5.0, "mem_pct": 1.0},
+        {"pid": 2, "name": "python3", "cpu_pct": 2.0, "mem_pct": 0.5},
+        {"pid": 3, "name": "NGINX", "cpu_pct": 3.0, "mem_pct": 0.8},
+    ]
+    rc, stdout, _ = _run_main_with_args({"filter": "nginx"}, proc_list=procs)
+    clean = ANSI_ESCAPE.sub("", stdout)
+    assert rc == 0, f"Expected exit 0 with filter=nginx, got {rc}"
+    assert "nginx-worker" in clean, "Expected 'nginx-worker' in filtered output"
+    assert "NGINX" in clean, "Expected 'NGINX' in filtered output"
+    assert "python3" not in clean, "Expected 'python3' to be excluded by filter"
+
+
+def test_filter_no_match_shows_message():
+    """When --filter matches nothing, output shows 'No matching processes'."""
+    procs = [
+        {"pid": 1, "name": "python3", "cpu_pct": 5.0, "mem_pct": 1.0},
+        {"pid": 2, "name": "bash", "cpu_pct": 1.0, "mem_pct": 0.3},
+    ]
+    rc, stdout, _ = _run_main_with_args({"filter": "nginx"}, proc_list=procs)
+    clean = ANSI_ESCAPE.sub("", stdout)
+    assert rc == 0, f"Expected exit 0 with filter=nginx (no match), got {rc}"
+    assert "No matching processes" in clean, (
+        "Expected 'No matching processes' when filter matches nothing"
+    )
+
+
+def test_filter_does_not_affect_cpu_section():
+    """--filter does not remove or alter the CPU Usage section."""
+    result = run_sysinfo("--filter=nginx")
+    assert result.returncode == 0
+    assert "CPU Usage:" in result.stdout, (
+        "Expected 'CPU Usage:' section to be present with --filter"
+    )
+
+
+def test_filter_does_not_affect_memory_section():
+    """--filter does not remove or alter the Memory Usage section."""
+    result = run_sysinfo("--filter=nginx")
+    assert result.returncode == 0
+    assert "Memory Usage:" in result.stdout, (
+        "Expected 'Memory Usage:' section to be present with --filter"
+    )
+
+
+def test_filter_does_not_affect_disk_section():
+    """--filter does not remove or alter the Disk Usage section."""
+    result = run_sysinfo("--filter=nginx")
+    assert result.returncode == 0
+    assert "Disk Usage:" in result.stdout, (
+        "Expected 'Disk Usage:' section to be present with --filter"
+    )
+
+
+def test_filter_empty_string_exits_nonzero():
+    """--filter= (empty string) exits non-zero with a helpful error message."""
+    result = run_sysinfo("--filter=")
+    assert result.returncode != 0, (
+        "Expected non-zero exit code for --filter= (empty string)"
+    )
+    combined = result.stdout + result.stderr
+    assert "empty" in combined.lower() or "pattern" in combined.lower(), (
+        f"Expected helpful error message about empty filter, got: {combined!r}"
+    )
+
+
+def test_filter_json_filters_top_processes():
+    """--json --filter only filters top_processes; cpu/memory/disk unaffected."""
+    proc_list = [
+        {"pid": 1, "name": "nginx-worker", "cpu_pct": 5.0, "mem_pct": 1.0},
+        {"pid": 2, "name": "python3", "cpu_pct": 2.0, "mem_pct": 0.5},
+    ]
+    import argparse as _argparse
+    import io
+
+    class _Args:
+        command = None
+        json = True
+        python_version = False
+        top = 10
+        filter = "nginx"
+
+    stdout_buf = io.StringIO()
+
+    def _fake_parse(self, args=None, namespace=None):
+        return _Args()
+
+    with patch.object(_argparse.ArgumentParser, "parse_args", _fake_parse), \
+         patch.object(sysinfo, "get_top_processes", return_value=proc_list), \
+         patch("sys.stdout", stdout_buf):
+        rc = sysinfo.main()
+
+    assert rc == 0, f"Expected exit 0 with json+filter=nginx, got {rc}"
+    data = json.loads(stdout_buf.getvalue())
+    names = [p["name"] for p in data["top_processes"]]
+    assert all("nginx" in n.lower() for n in names), (
+        f"Expected only nginx processes in top_processes, got: {names}"
+    )
+    assert "cpu" in data, "Expected 'cpu' key in --json --filter output"
+    assert "memory" in data, "Expected 'memory' key in --json --filter output"
+    assert "disk" in data, "Expected 'disk' key in --json --filter output"
+
+
+def test_filter_json_no_match_returns_empty_list():
+    """--json --filter with no matches returns top_processes as empty list."""
+    proc_list = [
+        {"pid": 1, "name": "python3", "cpu_pct": 5.0, "mem_pct": 1.0},
+        {"pid": 2, "name": "bash", "cpu_pct": 1.0, "mem_pct": 0.3},
+    ]
+    import argparse as _argparse
+    import io
+
+    class _Args:
+        command = None
+        json = True
+        python_version = False
+        top = 10
+        filter = "nginx"
+
+    stdout_buf = io.StringIO()
+
+    def _fake_parse(self, args=None, namespace=None):
+        return _Args()
+
+    with patch.object(_argparse.ArgumentParser, "parse_args", _fake_parse), \
+         patch.object(sysinfo, "get_top_processes", return_value=proc_list), \
+         patch("sys.stdout", stdout_buf):
+        rc = sysinfo.main()
+
+    assert rc == 0
+    data = json.loads(stdout_buf.getvalue())
+    assert data["top_processes"] == [], (
+        f"Expected empty top_processes list when filter has no match, "
+        f"got: {data['top_processes']!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # JSON error output for argparse validation  (PR #22 review INFO item)
 # ---------------------------------------------------------------------------
 
@@ -1529,4 +1719,51 @@ def test_json_top_negative_emits_json_error():
         )
     assert "error" in err_data, (
         f"Expected 'error' key in stderr JSON: {err_data!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# --filter + subcommand warning  (PR #23 review finding #1)
+# ---------------------------------------------------------------------------
+
+
+def test_filter_with_subcommand_emits_warning():
+    """--filter combined with a subcommand should emit a warning on stderr.
+
+    Note: --filter is a top-level flag; it must appear before the subcommand
+    name on the command line (e.g. ``--filter=nginx cpu --json``).
+    """
+    result = run_sysinfo("--filter=nginx", "cpu", "--json")
+    # The subcommand should still succeed
+    assert result.returncode == 0, (
+        f"Expected exit 0 when --filter is combined with 'cpu', "
+        f"got {result.returncode}"
+    )
+    # A human-readable warning should appear on stderr
+    assert "warning" in result.stderr.lower(), (
+        f"Expected a warning about --filter being ignored with 'cpu', "
+        f"got stderr: {result.stderr!r}"
+    )
+    assert "cpu" in result.stderr.lower(), (
+        f"Expected warning to mention 'cpu' subcommand, "
+        f"got stderr: {result.stderr!r}"
+    )
+
+
+def test_filter_with_subcommand_does_not_affect_output():
+    """--filter with a subcommand is silently ignored (output is unchanged).
+
+    Note: --filter is a top-level flag; it must appear before the subcommand
+    name on the command line (e.g. ``--filter=nginx cpu --json``).
+    """
+    result_no_filter = run_sysinfo("cpu", "--json")
+    result_with_filter = run_sysinfo("--filter=nginx", "cpu", "--json")
+    # Both should exit 0
+    assert result_no_filter.returncode == 0
+    assert result_with_filter.returncode == 0
+    # stdout should be identical JSON regardless of the ignored filter
+    data_no_filter = json.loads(result_no_filter.stdout)
+    data_with_filter = json.loads(result_with_filter.stdout)
+    assert set(data_no_filter.keys()) == set(data_with_filter.keys()), (
+        "--filter should not alter the keys returned by the cpu subcommand"
     )

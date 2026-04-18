@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import os
 import platform
 import sys
 
@@ -28,6 +29,27 @@ MEM_WARN = 70
 MEM_CRIT = 90
 DISK_WARN = 70
 DISK_CRIT = 90
+
+
+def _apply_filter(procs: list, pattern: str | None) -> list:
+    """Return *procs* filtered to entries whose name contains *pattern*.
+
+    The match is case-insensitive. Uses ``p.get('name', '')`` so that process
+    dicts with a missing or ``None`` name key are safely skipped rather than
+    raising a ``KeyError``.
+
+    Args:
+        procs: List of process dicts as returned by ``get_top_processes``.
+        pattern: Substring to match against process names, or ``None`` to
+            return *procs* unchanged.
+
+    Returns:
+        Filtered (or original) list of process dicts.
+    """
+    if pattern is None:
+        return procs
+    pat = pattern.lower()
+    return [p for p in procs if pat in p.get('name', '').lower()]
 
 
 def format_header(text: str) -> str:
@@ -337,6 +359,17 @@ def main() -> int:
         metavar="N",
         help="Show top N processes by CPU%% (default: 10; 0 to disable).",
     )
+    parser.add_argument(
+        "--filter",
+        type=str,
+        default=None,
+        metavar="PATTERN",
+        help=(
+            "Filter the process list to names containing PATTERN "
+            "(case-insensitive substring match). "
+            "Must be a non-empty string."
+        ),
+    )
 
     subparsers = parser.add_subparsers(dest="command")
 
@@ -383,6 +416,26 @@ def main() -> int:
     )
 
     args = parser.parse_args()
+
+    # Validate --filter: reject empty (or whitespace-only) strings.
+    _filter = args.filter
+    if _filter is not None and _filter.strip() == "":
+        _msg = "--filter value must not be empty; provide a non-empty pattern"
+        if getattr(args, 'json', False):
+            print(json.dumps({"error": _msg}), file=sys.stderr)
+            return 1
+        parser.error(_msg)
+
+    # --filter only applies to the default (no-subcommand) process list view.
+    # Warn the user if they combine it with a subcommand so it isn't silently
+    # discarded.
+    if _filter is not None and args.command is not None:
+        print(
+            f"Warning: --filter has no effect with the '{args.command}' "
+            "subcommand and will be ignored. "
+            "Use --filter without a subcommand to filter the process list.",
+            file=sys.stderr,
+        )
 
     # --- cpu sub-command ---
     if args.command == "cpu":
@@ -441,6 +494,7 @@ def main() -> int:
             # that would otherwise produce an inconsistent overall/cores pair.
             cores = psutil.cpu_percent(interval=0.1, percpu=True)
             overall = sum(cores) / len(cores) if cores else 0.0
+            top_procs = _apply_filter(get_top_processes(args.top), _filter)
             print(json.dumps(
                 {
                     "version": "1.0",
@@ -451,7 +505,7 @@ def main() -> int:
                     },
                     "memory": get_mem_details(),
                     "disk": get_disk_mounts(),
-                    "top_processes": get_top_processes(args.top),
+                    "top_processes": top_procs,
                 },
                 indent=2,
             ))
@@ -499,13 +553,17 @@ def main() -> int:
 
     if args.top > 0:
         print()
+        top_procs = _apply_filter(get_top_processes(args.top), _filter)
         print(format_header(f"Top {args.top} Processes (by CPU%):"))
-        print(f"  {'PID':>7}  {'Name':<20}  {'CPU%':>7}  {'MEM%':>7}")
-        for proc in get_top_processes(args.top):
-            cpu_str = colorize_pct(proc['cpu_pct'], CPU_WARN, CPU_CRIT)
-            mem_str = colorize_pct(proc['mem_pct'], MEM_WARN, MEM_CRIT)
-            name = proc['name'][:20]
-            print(f"  {proc['pid']:>7}  {name:<20}  {cpu_str}  {mem_str}")
+        if not top_procs:
+            print("  No matching processes")
+        else:
+            print(f"  {'PID':>7}  {'Name':<20}  {'CPU%':>7}  {'MEM%':>7}")
+            for proc in top_procs:
+                cpu_str = colorize_pct(proc['cpu_pct'], CPU_WARN, CPU_CRIT)
+                mem_str = colorize_pct(proc['mem_pct'], MEM_WARN, MEM_CRIT)
+                name = proc['name'][:20]
+                print(f"  {proc['pid']:>7}  {name:<20}  {cpu_str}  {mem_str}")
 
     return 0
 
