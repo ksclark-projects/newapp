@@ -370,6 +370,19 @@ def main() -> int:
             "Must be a non-empty string."
         ),
     )
+    parser.add_argument(
+        "--sort",
+        type=str,
+        default=None,
+        choices=["mem"],
+        metavar="KEY",
+        help=(
+            "Sort the process list by KEY. "
+            "Valid values: mem (memory usage %%). "
+            "Default: CPU%% descending. "
+            "Unrecognized values are rejected with a helpful error."
+        ),
+    )
 
     subparsers = parser.add_subparsers(dest="command")
 
@@ -437,6 +450,16 @@ def main() -> int:
             file=sys.stderr,
         )
 
+    # --sort only applies to the default (no-subcommand) process list view.
+    # Warn the user if they combine it with a subcommand so it isn't silently
+    # discarded.
+    if getattr(args, 'sort', None) is not None and args.command is not None:
+        print(
+            f"Warning: --sort has no effect with the '{args.command}' "
+            "subcommand and will be ignored.",
+            file=sys.stderr,
+        )
+
     # --- cpu sub-command ---
     if args.command == "cpu":
         if args.cpu_json:
@@ -495,6 +518,10 @@ def main() -> int:
             cores = psutil.cpu_percent(interval=0.1, percpu=True)
             overall = sum(cores) / len(cores) if cores else 0.0
             top_procs = _apply_filter(get_top_processes(args.top), _filter)
+            if args.sort == "mem":
+                top_procs = sorted(
+                    top_procs, key=lambda p: p.get("mem_pct", 0.0), reverse=True
+                )
             print(json.dumps(
                 {
                     "version": "1.0",
@@ -554,7 +581,12 @@ def main() -> int:
     if args.top > 0:
         print()
         top_procs = _apply_filter(get_top_processes(args.top), _filter)
-        print(format_header(f"Top {args.top} Processes (by CPU%):"))
+        if args.sort == "mem":
+            top_procs = sorted(
+                top_procs, key=lambda p: p.get("mem_pct", 0.0), reverse=True
+            )
+        sort_label = "MEM%" if args.sort == "mem" else "CPU%"
+        print(format_header(f"Top {args.top} Processes (by {sort_label}):"))
         if not top_procs:
             print("  No matching processes")
         else:
