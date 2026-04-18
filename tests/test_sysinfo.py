@@ -1381,7 +1381,7 @@ def _run_error_scenario(command_attr, json_flag_attr, patch_target,
     import argparse as _argparse
     import io
 
-    attrs = {command_attr: True}
+    attrs = {command_attr: True, "filter": None}
     if extra_attrs:
         attrs.update(extra_attrs)
 
@@ -1455,6 +1455,7 @@ def test_top_level_json_error_unit_nonzero_exit():
 
     class _Args:
         command = None
+        filter = None
         json = True
         python_version = False
         top = 10
@@ -1718,4 +1719,51 @@ def test_json_top_negative_emits_json_error():
         )
     assert "error" in err_data, (
         f"Expected 'error' key in stderr JSON: {err_data!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# --filter + subcommand warning  (PR #23 review finding #1)
+# ---------------------------------------------------------------------------
+
+
+def test_filter_with_subcommand_emits_warning():
+    """--filter combined with a subcommand should emit a warning on stderr.
+
+    Note: --filter is a top-level flag; it must appear before the subcommand
+    name on the command line (e.g. ``--filter=nginx cpu --json``).
+    """
+    result = run_sysinfo("--filter=nginx", "cpu", "--json")
+    # The subcommand should still succeed
+    assert result.returncode == 0, (
+        f"Expected exit 0 when --filter is combined with 'cpu', "
+        f"got {result.returncode}"
+    )
+    # A human-readable warning should appear on stderr
+    assert "warning" in result.stderr.lower(), (
+        f"Expected a warning about --filter being ignored with 'cpu', "
+        f"got stderr: {result.stderr!r}"
+    )
+    assert "cpu" in result.stderr.lower(), (
+        f"Expected warning to mention 'cpu' subcommand, "
+        f"got stderr: {result.stderr!r}"
+    )
+
+
+def test_filter_with_subcommand_does_not_affect_output():
+    """--filter with a subcommand is silently ignored (output is unchanged).
+
+    Note: --filter is a top-level flag; it must appear before the subcommand
+    name on the command line (e.g. ``--filter=nginx cpu --json``).
+    """
+    result_no_filter = run_sysinfo("cpu", "--json")
+    result_with_filter = run_sysinfo("--filter=nginx", "cpu", "--json")
+    # Both should exit 0
+    assert result_no_filter.returncode == 0
+    assert result_with_filter.returncode == 0
+    # stdout should be identical JSON regardless of the ignored filter
+    data_no_filter = json.loads(result_no_filter.stdout)
+    data_with_filter = json.loads(result_with_filter.stdout)
+    assert set(data_no_filter.keys()) == set(data_with_filter.keys()), (
+        "--filter should not alter the keys returned by the cpu subcommand"
     )
